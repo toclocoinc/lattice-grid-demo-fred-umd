@@ -191,8 +191,12 @@ function monthStart(date) {
  */
 function toMonthly(points) {
   const last = new Map();
-  for (const point of points) last.set(monthStart(point.d), point.v);
-  return [...last.entries()].map(([d, v]) => ({ d, v })).sort((a, b) => (a.d < b.d ? -1 : 1));
+  /* `src` is the day FRED stamped the reading, kept so the real-time matrix
+     below can be looked up against the observation it actually published. */
+  for (const point of points) last.set(monthStart(point.d), { v: point.v, src: point.d });
+  return [...last.entries()]
+    .map(([d, kept]) => ({ d, v: kept.v, src: kept.src }))
+    .sort((a, b) => (a.d < b.d ? -1 : 1));
 }
 
 /* ------------------------------------------------------------------ */
@@ -350,6 +354,146 @@ async function readVintageKeyed(id, vintage) {
 }
 
 /* ------------------------------------------------------------------ */
+/* The real-time matrix: when each reading was published, and at what   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * One series' real-time matrix: every reading, every value it has held, and
+ * the day each of those values became the published one.
+ *
+ * FRED's `series/observations` with a real-time RANGE rather than a single day
+ * returns one row per observation per real-time interval: the same observation
+ * date appears once for each value it has ever had, with `realtime_start` the
+ * day that value was published. That is exactly what a rewind of the whole
+ * dashboard needs -- for any day, the set of readings published by then, at the
+ * values they held then.
+ *
+ * Only the readings the dashboard actually shows are kept: the monthly shape
+ * `buildObservations` produced, looked up by the day FRED stamped each one. A
+ * daily series reduced to one reading a month contributes one row a month, not
+ * one a day.
+ *
+ * @param {string} id the series
+ * @param {{d: string, v: number, src: string}[]} points the readings the page shows
+ * @returns {Promise<[string, number, string][]>} `[observation date, value, published on]`
+ */
+async function readRealtime(id, points) {
+  const body = await getJson(
+    api('series/observations', {
+      series_id: id,
+      realtime_start: VINTAGE_START,
+      realtime_end: '9999-12-31',
+      observation_start: VINTAGE_START,
+      limit: '100000',
+    }),
+    `the real-time matrix of ${id}`,
+  );
+  /* The readings the page shows, by the day FRED stamped them. */
+  const wanted = new Map();
+  for (const point of points) if (point.d >= VINTAGE_START) wanted.set(point.src, point.d);
+
+  /* Per observation, the values it has held, oldest publication first. */
+  const byObservation = new Map();
+  for (const row of body.observations || []) {
+    const shown = wanted.get(row.date);
+    if (shown === undefined) continue;
+    const value = toValue(row.value);
+    if (value === null) continue;
+    if (!byObservation.has(shown)) byObservation.set(shown, []);
+    byObservation.get(shown).push({ from: row.realtime_start, v: value });
+  }
+
+  const out = [];
+  for (const [d, history] of byObservation) {
+    history.sort((a, b) => (a.from < b.from ? -1 : 1));
+    let previous = null;
+    for (const step of history) {
+      /* A row identical to the one before it is not a revision, it is the same
+         number still standing, and the page has nothing to do with it. */
+      if (previous !== null && step.v === previous) continue;
+      previous = step.v;
+      out.push([d, step.v, step.from]);
+    }
+  }
+  out.sort((a, b) => (a[2] === b[2] ? (a[0] < b[0] ? -1 : 1) : a[2] < b[2] ? -1 : 1));
+  return out;
+}
+
+/**
+ * Build the real-time matrix for every series, in whichever mode is in force.
+ *
+ * KEYED: the real thing, from the JSON API, for all of them.
+ *
+ * KEYLESS: the five headline series get theirs out of the ALFRED vintages that
+ * were fetched anyway -- the first vintage that carried each value is the day
+ * it was published, to the resolution of the fixed vintage list. The other
+ * forty-two have no vintage history without a key, so each of their readings is
+ * stamped at the start of the window: the rewind shows them at today's values
+ * throughout, and the page says so rather than implying a history it has not
+ * got.
+ *
+ * @param {object[]} catalogue the catalogue rows
+ * @param {Map<string, object[]>} shape the monthly shape of each series
+ * @param {object[]} vintages the vintage records already built
+ * @returns {Promise<{realtime: object[], withHistory: string[], rows: number}>}
+ */
+async function buildRealtime(catalogue, shape, vintages) {
+  const realtime = [];
+  const withHistory = [];
+  let rows = 0;
+
+  for (const row of catalogue) {
+    const points = shape.get(row.id) || [];
+    let matrix;
+    if (MODE === 'keyed') {
+      matrix = await readRealtime(row.id, points);
+      withHistory.push(row.id);
+      say(`  real time: ${row.id} -- ${matrix.length} rows`);
+      await pause(200);
+    } else if (HEADLINE.includes(row.id)) {
+      matrix = realtimeFromVintages(row.id, vintages);
+      withHistory.push(row.id);
+      say(`  real time: ${row.id} -- ${matrix.length} rows, from the saved vintages`);
+    } else {
+      /* Today's value, stamped at the start of the window. */
+      matrix = points
+        .filter((point) => point.d >= VINTAGE_START)
+        .map((point) => [point.d, point.v, VINTAGE_START]);
+    }
+    rows += matrix.length;
+    realtime.push({ s: row.id, r: matrix });
+  }
+  return { realtime, withHistory, rows };
+}
+
+/**
+ * A keyless real-time matrix for a headline series, out of its saved vintages.
+ *
+ * The first saved vintage that carried a value is the best evidence this copy
+ * has of when that value was published. It is coarser than the keyed path --
+ * the fixed vintage list is quarterly rather than per release -- and the page
+ * says which kind of copy it is showing.
+ *
+ * @param {string} id the series
+ * @param {object[]} vintages every vintage record
+ * @returns {[string, number, string][]} the matrix
+ */
+function realtimeFromVintages(id, vintages) {
+  const mine = vintages.filter((v) => v.series === id);
+  const seen = new Map();
+  const out = [];
+  for (const record of mine) {
+    for (const o of record.observations) {
+      if (seen.get(o.d) === o.v) continue;
+      seen.set(o.d, o.v);
+      out.push([o.d, o.v, record.vintageDate]);
+    }
+  }
+  out.sort((a, b) => (a[2] === b[2] ? (a[0] < b[0] ? -1 : 1) : a[2] < b[2] ? -1 : 1));
+  return out;
+}
+
+/* ------------------------------------------------------------------ */
 /* The build                                                           */
 /* ------------------------------------------------------------------ */
 
@@ -362,18 +506,21 @@ async function buildObservations() {
   const wanted = [...SERIES, RECESSION];
   const observations = [];
   const latest = new Map();
+  /* The monthly shape of each series, with the source day of each reading. */
+  const shape = new Map();
   for (const entry of wanted) {
     const reduce = entry.frequency === 'Daily' || entry.frequency === 'Weekly';
     const read = await readValues(entry.id);
-    const points = reduce ? toMonthly(read) : read;
+    const points = reduce ? toMonthly(read) : read.map((p) => ({ ...p, src: p.d }));
     if (!points.length) throw new Error(`${entry.id}: FRED returned no readings at all`);
     for (const point of points) observations.push({ s: entry.id, d: point.d, v: point.v });
+    shape.set(entry.id, points);
     latest.set(entry.id, points[points.length - 1].d);
     say(`  values: ${entry.id} -- ${read.length} readings${reduce ? `, ${points.length} after reducing to months` : ''}`);
     await pause(250);
   }
   observations.sort((a, b) => (a.d === b.d ? (a.s < b.s ? -1 : 1) : a.d < b.d ? -1 : 1));
-  return { observations, latest };
+  return { observations, latest, shape };
 }
 
 /**
@@ -494,7 +641,7 @@ async function main() {
   }
 
   /* ---- the readings ---- */
-  const { observations, latest } = await buildObservations();
+  const { observations, latest, shape } = await buildObservations();
   for (const row of catalogue) row.latestDate = latest.get(row.id) || null;
 
   /* ---- the vintages ---- */
@@ -513,6 +660,11 @@ async function main() {
     }
   }
 
+  /* ---- when every reading was published, and at what ---- */
+  const { realtime, withHistory, rows: realtimeRows } = await buildRealtime(catalogue, shape, vintages);
+  say(`  real time: ${realtimeRows} rows across ${realtime.length} series, `
+    + `${withHistory.length} of them with a real revision history`);
+
   /* ---- out ---- */
   const meta = {
     builtAt: new Date().toISOString(),
@@ -523,9 +675,17 @@ async function main() {
     headline: HEADLINE,
     recessionSeries: RECESSION.id,
     defaultSelection: DEFAULT_SELECTION,
+    /* What the whole-dashboard rewind can honestly show. */
+    realtime: {
+      start: VINTAGE_START,
+      rows: realtimeRows,
+      seriesWithHistory: withHistory.length,
+      seriesWithoutHistory: catalogue.length - withHistory.length,
+    },
     counts: {
       series: catalogue.length,
       observations: observations.length,
+      realtime: realtimeRows,
       vintages: vintages.length,
       vintageDates: Object.fromEntries([...dates].map(([id, list]) => [id, list.length])),
     },
@@ -536,10 +696,12 @@ async function main() {
   bytes += await write('series.json', catalogue);
   bytes += await write('observations.json', observations);
   bytes += await write('vintages.json', vintages);
+  bytes += await write('realtime.json', realtime);
   bytes += await write('meta.json', meta);
 
   say(
-    `Done: ${catalogue.length} series, ${observations.length} readings, ${vintages.length} vintages, ` +
+    `Done: ${catalogue.length} series, ${observations.length} readings, ${realtimeRows} real-time rows, ` +
+      `${vintages.length} vintages, ` +
       `${(bytes / 1024 / 1024).toFixed(2)} MB in total.`,
   );
 }
