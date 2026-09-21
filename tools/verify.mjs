@@ -427,6 +427,83 @@ try {
   check(mainGrid.columnHeaders > 0, 'the main grid drew a column header row', `${mainGrid.columnHeaders}`);
   check(mainGrid.links > 0, "each row's FRED id links to that series on fred.stlouisfed.org", mainGrid.firstLink);
 
+  /* ---- the catalogue puts the unit next to the numbers it measures ---- */
+
+  const catalogueHeadings = await evaluate(`(() => {
+    const d = window.__fredDemo;
+    const root = document.querySelector('.primary-host .lattice');
+    const head = (id) => {
+      const cell = root.querySelector('[role="columnheader"][data-col="' + id + '"]');
+      if (!cell) return null;
+      return {
+        text: cell.textContent.trim(),
+        main: (cell.querySelector('.col-head-main') || {}).textContent || null,
+        sub: (cell.querySelector('.col-head-sub') || {}).textContent || null,
+        tooltip: cell.getAttribute('title'),
+      };
+    };
+    return {
+      order: d.catalogueGrid.columns.visible().map((c) => c.id),
+      units: head('units'),
+      latestValue: head('latestValue'),
+      change: head('change'),
+    };
+  })()`);
+  const order = catalogueHeadings.order;
+  console.log(`  catalogue column order: ${order.join(', ')}`);
+  console.log(`  units heading: ${JSON.stringify(catalogueHeadings.units)}`);
+  check(order.indexOf('units') === order.indexOf('latestValue') - 1,
+    'the units column sits immediately before the latest value',
+    `${order.join(', ')}`);
+  check(order.indexOf('change') === order.indexOf('latestValue') + 1,
+    'and the change on the period before follows it, so both read against the unit',
+    `${order.join(', ')}`);
+  /* And the three of them are on screen at the width a reader opens at, rather
+     than past the right edge where the unit could not answer anything. */
+  const visibleAcross = await evaluate(`(() => {
+    const root = document.querySelector('.primary-host .lattice');
+    const view = root.querySelector('.lat-body-viewport');
+    const right = view.getBoundingClientRect().right;
+    const seen = [...root.querySelectorAll('[role="columnheader"]')]
+      .filter((c) => c.getBoundingClientRect().right <= right + 1)
+      .map((c) => c.getAttribute('data-col'));
+    return seen;
+  })()`);
+  console.log(`  catalogue columns on screen without scrolling: ${visibleAcross.join(', ')}`);
+  for (const id of ['units', 'latestValue', 'change']) {
+    check(visibleAcross.includes(id), `the ${id} column is on screen without scrolling sideways`,
+      visibleAcross.join(', '));
+  }
+  check(catalogueHeadings.latestValue
+    && catalogueHeadings.latestValue.main === 'Latest value'
+    && /in the series. units/i.test(catalogueHeadings.latestValue.sub || ''),
+    'the latest-value heading says it is in the series\u2019 units',
+    JSON.stringify(catalogueHeadings.latestValue));
+  check(catalogueHeadings.change
+    && catalogueHeadings.change.main === 'Change on the period before'
+    && /in the series. units/i.test(catalogueHeadings.change.sub || ''),
+    'so does the change heading',
+    JSON.stringify(catalogueHeadings.change));
+  check(!!catalogueHeadings.units && catalogueHeadings.units.main === 'Units'
+    && /next two columns/i.test(catalogueHeadings.units.sub || ''),
+    'the units heading says the two columns after it are in these units',
+    JSON.stringify(catalogueHeadings.units));
+
+  /* The full unit text is on the cell, so a unit wider than its column can
+     still be read. (`header.tooltip` is declared but nothing reads it, so the
+     heading is not where this could live.) */
+  const unitCell = await evaluate(`(() => {
+    const root = document.querySelector('.primary-host .lattice');
+    const cell = root.querySelector('.lat-body-viewport [role="gridcell"][data-col="units"]');
+    return cell ? { text: cell.textContent.trim(), title: cell.getAttribute('title') } : null;
+  })()`);
+  console.log(`  a units cell: ${JSON.stringify(unitCell)}`);
+  check(!!unitCell && !!unitCell.title && unitCell.title.length > 0,
+    'a units cell carries the full unit text, for one too wide for the column',
+    JSON.stringify(unitCell));
+  check(!!unitCell && catalogue.some((r) => r.units === unitCell.title),
+    'and that text is a unit the snapshot holds', unitCell && unitCell.title);
+
   const rails = await evaluate(`document.querySelectorAll('.lat-panel-dock').length`);
   console.log(`  tool rails on the page: ${rails}`);
   check(rails === 0, 'no grid shows the right-hand tool rail', `${rails} rail(s)`);
@@ -781,7 +858,7 @@ try {
       /* How much of the panel is left over below the table. */
       deadBand: panel ? Math.round(panel.getBoundingClientRect().bottom - pane.getBoundingClientRect().bottom) : null,
       columns: [...root.querySelectorAll('[role="columnheader"]')].map((c) => {
-        const title = c.querySelector('.obs-head-title');
+        const title = c.querySelector('.col-head-main');
         return {
           id: c.getAttribute('data-col'),
           width: Math.round(c.getBoundingClientRect().width),
@@ -836,20 +913,24 @@ try {
     const root = document.querySelector('.observations-tab .grid-pane .lattice');
     const cells = [...root.querySelectorAll('[role="columnheader"]')];
     return cells.map((c) => ({
-      title: (c.querySelector('.obs-head-title') || {}).textContent || null,
-      id: (c.querySelector('.obs-head-id') || {}).textContent || null,
-      text: c.textContent.trim().slice(0, 40),
+      colId: c.getAttribute('data-col'),
+      title: (c.querySelector('.col-head-main') || {}).textContent || null,
+      sub: (c.querySelector('.col-head-sub') || {}).textContent || null,
     }));
   })()`);
   const named = headings.filter((h) => h.title);
-  console.log(`  headings: ${headings.map((h) => h.text).join(' | ')}`);
+  console.log(`  headings: ${named.map((h) => `${h.title} / ${h.sub}`).join(' | ')}`);
   check(named.length === loaded.selected.length, 'every series column is headed by the series name',
     `${named.length} named of ${headings.length} headings`);
   for (const sid of loaded.selected) {
     const row = catalogue.find((r) => r.id === sid);
-    const head = named.find((h) => h.id === sid);
-    check(!!head && head.title === row.title, `the ${sid} column is headed "${row.title}" with its FRED id beneath`,
-      head ? `${head.title} / ${head.id}` : 'not found');
+    const head = named.find((h) => h.colId === sid);
+    check(!!head && head.title === row.title, `the ${sid} column is headed "${row.title}"`,
+      head ? `${head.title}` : 'not found');
+    /* The question the owner asked of this table: what am I looking at? */
+    check(!!head && (head.sub || '').includes(row.units),
+      `and its second line names the unit, "${row.units}"`, head ? head.sub : 'not found');
+    check(!!head && (head.sub || '').includes(sid), 'with the FRED id beside it', head ? head.sub : 'not found');
   }
 
   /* ---- ticking a checkbox selects a row and nothing else ---- */

@@ -97,7 +97,7 @@
         title: 'Series',
         cell: { render: 'twoline', props: { secondary: 'units' } },
         filter: { enabled: false },
-        layout: fixedLayout({ width: 300, pin: 'start' }),
+        layout: fixedLayout({ width: 270, pin: 'start' }),
       },
       {
         id: 'sid',
@@ -108,35 +108,45 @@
           props: { href: `${FRED_SERIES_URL}{{value}}`, target: '_blank' },
         },
         filter: { enabled: false },
-        layout: fixedLayout({ width: 150 }),
-      },
-      { id: 'category', field: 'category', title: 'Category', filter: { enabled: false }, layout: fixedLayout({ width: 170 }) },
-      { id: 'units', field: 'units', title: 'Units', filter: { enabled: false }, layout: fixedLayout({ width: 210 }) },
-      { id: 'frequency', field: 'frequency', title: 'Frequency', filter: { enabled: false }, layout: fixedLayout({ width: 110 }) },
-      { id: 'seasonal', field: 'seasonal', title: 'Seasonal adjustment', filter: { enabled: false }, layout: fixedLayout({ width: 220 }) },
-      {
-        id: 'latestDate',
-        field: 'latestDate',
-        title: 'Latest reading',
-        type: 'date',
-        format: { type: 'date', pattern: 'MMM yyyy' },
-        filter: { enabled: false },
         layout: fixedLayout({ width: 130 }),
+      },
+      { id: 'category', field: 'category', title: 'Category', filter: { enabled: false }, layout: fixedLayout({ width: 150 }) },
+      /*
+       * The unit sits immediately before the two columns that are measured in
+       * it, because "24,269.61" and "+498.64" are not numbers anyone can read
+       * without knowing what they count. The heading of each of those two says
+       * so as well, on a second line.
+       */
+      {
+        id: 'units',
+        field: 'units',
+        title: 'Units',
+        header: { render: twoLineHeading('Units', 'what the next two columns count') },
+        /*
+         * The full text on the cell, for a unit longer than the column is wide.
+         * On the cell rather than the heading because a heading tooltip is the
+         * one place it could not go: `header.tooltip` is declared but nothing
+         * reads it, so it would have been a line of code that did nothing.
+         */
+        cell: { tooltip: (p) => String(p.value == null ? '' : p.value) },
+        filter: { enabled: false },
+        layout: fixedLayout({ width: 200 }),
       },
       {
         id: 'latestValue',
         field: 'latestValue',
-        title: 'Latest value',
+        title: "Latest value, in the series' units",
+        header: { render: twoLineHeading('Latest value', "in the series' units") },
         type: 'number',
         filter: { enabled: false },
         format: { type: 'number', decimals: 2 },
-        layout: fixedLayout({ width: 140 }),
+        layout: fixedLayout({ width: 150 }),
       },
       {
         id: 'change',
         field: 'change',
-        title: 'Change on the period before',
-        headerTooltip: "In the series' own units. For a series that is itself a rate, that is percentage points.",
+        title: "Change on the period before, in the series' units",
+        header: { render: twoLineHeading('Change on the period before', "in the series' units") },
         type: 'number',
         filter: { enabled: false },
         format: { type: 'number', decimals: 2, signed: true },
@@ -153,23 +163,34 @@
         id: 'yoyPoints',
         field: 'yoyPoints',
         title: 'On a year earlier, points',
-        headerTooltip: 'For a series that is itself a rate: the change in percentage points.',
+        header: { render: twoLineHeading('On a year earlier', 'percentage points, for a rate') },
         type: 'number',
         filter: { enabled: false },
         format: { type: 'number', decimals: 2, suffix: ' pp', signed: true },
         cell: { decoration: { type: 'bar', min: -bars.points, max: bars.points, origin: 0 } },
-        layout: fixedLayout({ width: 180 }),
+        layout: fixedLayout({ width: 200 }),
       },
       {
         id: 'yoyPercent',
         field: 'yoyPercent',
         title: 'On a year earlier, %',
-        headerTooltip: 'For a level, a count or an index: the change as a percentage.',
+        header: { render: twoLineHeading('On a year earlier', 'per cent, for a level or an index') },
         type: 'number',
         filter: { enabled: false },
         format: { type: 'number', decimals: 1, suffix: '%', signed: true },
         cell: { decoration: { type: 'bar', min: -bars.percent, max: bars.percent, origin: 0 } },
-        layout: fixedLayout({ width: 170 }),
+        layout: fixedLayout({ width: 210 }),
+      },
+      { id: 'frequency', field: 'frequency', title: 'Frequency', filter: { enabled: false }, layout: fixedLayout({ width: 110 }) },
+      { id: 'seasonal', field: 'seasonal', title: 'Seasonal adjustment', filter: { enabled: false }, layout: fixedLayout({ width: 220 }) },
+      {
+        id: 'latestDate',
+        field: 'latestDate',
+        title: 'Latest reading',
+        type: 'date',
+        format: { type: 'date', pattern: 'MMM yyyy' },
+        filter: { enabled: false },
+        layout: fixedLayout({ width: 130 }),
       },
       { id: 'source', field: 'source', title: 'Published by', filter: { enabled: false }, layout: fixedLayout({ width: 280 }) },
       {
@@ -221,19 +242,17 @@
          */
         title: row.title,
         header: {
-          render: () => {
-            const wrap = document.createElement('span');
-            wrap.className = 'obs-head';
-            wrap.append(el('span', 'obs-head-title', row.title));
-            wrap.append(el('span', 'obs-head-id', row.sid));
-            return wrap;
-          },
-          tooltip: `${row.officialTitle || row.title}. FRED id ${row.sid}. Measured in `
-            + `${row.units.toLowerCase()}, published ${row.frequency.toLowerCase()}.`,
+          /* The unit first, because "4.10" against "24,269.61" is the question
+             a reader actually has; FRED's reference follows it. */
+          render: twoLineHeading(row.title, `${row.units} \u00b7 ${row.sid}`),
         },
         type: 'number',
         filter: { enabled: false },
         format: { type: 'number', decimals: 2 },
+        cell: {
+          tooltip: `${row.officialTitle || row.title}. FRED id ${row.sid}. Measured in `
+            + `${row.units.toLowerCase()}, published ${row.frequency.toLowerCase()}.`,
+        },
         /*
          * The series columns share whatever the month column leaves, down to a
          * floor of 140px, which is what a two-line heading needs to be read
@@ -251,6 +270,27 @@
       });
     }
     return columns;
+  }
+
+  /**
+   * A two-line column heading: a name, and a smaller line under it.
+   *
+   * `header.render` is handed the label element and may return a node for the
+   * grid to attach, which is what makes two lines possible without a heading
+   * twice as wide as the numbers under it.
+   *
+   * @param {string} main the heading proper
+   * @param {string} sub the second line
+   * @returns {() => HTMLElement} the renderer
+   */
+  function twoLineHeading(main, sub) {
+    return () => {
+      const wrap = document.createElement('span');
+      wrap.className = 'col-head';
+      wrap.append(el('span', 'col-head-main', main));
+      wrap.append(el('span', 'col-head-sub', sub));
+      return wrap;
+    };
   }
 
   /**

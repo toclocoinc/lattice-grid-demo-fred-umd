@@ -91,14 +91,15 @@
         id: 'revision',
         field: 'revision',
         /* A revision to a rate is a number of percentage points; a revision to
-           a level or an index is a number in that series' own units. */
-        title: rate ? 'Revision, percentage points' : 'Revision',
+           a level or an index is a number in that series' own units. Either
+           way the heading says which, as the two columns before it do. */
+        title: rate ? 'Revision, percentage points' : `Revision (${units})`,
         type: 'number',
         filter: { enabled: false },
         format: rate
           ? { type: 'number', decimals: 2, suffix: ' pp', signed: true }
           : { type: 'number', decimals: 2, signed: true },
-        layout: { width: rate ? 200 : 140, movable: false },
+        layout: { width: 200, movable: false },
       },
     ];
     /* No percentage column at all for a rate series: a revision of 0.30 points

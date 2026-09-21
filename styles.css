@@ -439,21 +439,24 @@ body {
   min-height: 320px;
 }
 
-/* Two lines in a heading: the series' name, and FRED's reference beneath it. */
-.obs-head {
+/*
+ * A two-line column heading: the name, and underneath it the thing a reader
+ * needs in order to read the numbers below -- the unit, and FRED's reference.
+ */
+.col-head {
   display: flex;
   flex-direction: column;
   line-height: 1.2;
   min-width: 0;
 }
 
-.obs-head-title {
+.col-head-main {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.obs-head-id {
+.col-head-sub {
   color: var(--ink-soft);
   font-size: 10px;
   font-weight: 400;
