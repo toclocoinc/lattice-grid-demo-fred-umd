@@ -107,23 +107,26 @@ their slices:
 | `catalogue` | the `series` rows | the main grid, the table you choose from |
 | `chart` | the `obs` rows, with an index column derived per route | the time-series chart |
 | `tiles` | the same `obs` rows | the KPI tiles |
-| `observations` | the same rows, **rolled up by date** | the readings table, a column per series |
-
-plus a `subscribe` handler, a viewer that is not a grid at all, which keeps
-the count under the chart honest off the same keyed diff the grids get.
+| `subscribe` | the same rows, as a keyed diff to a plain handler | the readings table, which is a pivot rather than a slice |
 
 **Ticking a series reloads nothing.** `router.link(catalogue, …)` makes the
-main grid's selection a filter on what the other three routes receive. The
-chart, the tiles and the readings table are re-pushed through the same keyed
-diff the router uses for a live feed, so only rows that actually changed
-repaint, and scroll and sort survive.
+main grid's selection a filter on what the other routes receive. The chart and
+the tiles are re-pushed through the same keyed diff the router uses for a live
+feed, so only rows that actually changed repaint, and scroll and sort survive.
 
-**The readings table is a router roll-up, not a second load.** The
-`observations` route declares `rollup: { groupBy: 'd', aggregate: … }` with one
-aggregate per catalogue series, so the long-form stream becomes one row per date
-with a column per series. Every series has an aggregate from the start; the link
-means an unselected series' rows never reach the route, so its aggregate sees
-nothing and its column is hidden.
+**The readings table is a subscription, not a second load.** One row a date with
+a column per series is a different shape from the rows the stream carries, and
+`subscribe` is the router's route for a viewer it cannot shape itself: the
+handler is given the same keyed diff a grid gets, holds the slice, and turns it
+into the table's shape. It follows the selection and the rewind because the diff
+does.
+
+**The readings table is a router subscription, not a second load.** One row a
+date with a column per series is a different shape from the rows the stream
+carries, and `subscribe` is the router's route for a viewer it cannot shape
+itself: the handler is given the same keyed diff a grid gets, holds the slice,
+and turns it into the table's shape. It follows the selection and the rewind
+because the diff does.
 
 **Four transformations.** Level, change on the period before, change on a year
 earlier, and an index set to 100 at a month you choose (1970-01 onwards; 2019-12

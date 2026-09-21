@@ -540,23 +540,6 @@
     };
 
     /*
-     * The observations grid is a rollup route: one summary row per date, and
-     * one aggregate per catalogue series that picks that series' reading out of
-     * the date's rows. Every series has an aggregate whether or not it is
-     * selected, because the link below means an unselected series' rows never
-     * reach the route at all -- its aggregate simply sees nothing and answers
-     * null, and its column is hidden.
-     */
-    const aggregates = {};
-    for (const row of data.catalogue) {
-      const sid = row.sid;
-      aggregates[sid] = (rows) => {
-        for (const reading of rows) if (reading.s === sid) return reading.v;
-        return null;
-      };
-    }
-
-    /*
      * The stream, in publication order.
      *
      * Every reading the snapshot holds, stamped with the day FRED published
@@ -594,24 +577,55 @@
     router.attach(catalogueGrid, 'series', { label: 'catalogue' });
     router.attach(chartGrid, 'obs', { label: 'chart', transform: withIndex });
     router.attach(tileGrid, 'obs', { label: 'tiles' });
-    router.attach(observationsGrid, 'obs', {
-      label: 'observations',
-      rollup: { groupBy: 'd', aggregate: aggregates },
-      sort: { key: 'd', dir: 'desc' },
+    /*
+     * The readings table is a pivot, and a pivot is not a slice: one row a date
+     * with a column per series is a different shape from the rows the stream
+     * carries. `subscribe` is the router's route for a viewer it cannot shape
+     * itself -- the handler gets the same keyed diff a grid does, holds the
+     * slice, and turns it into the shape the table wants.
+     */
+    const readingLine = el('p', 'chart-note');
+    const routedReadings = new Map();
+    let readingsPending = null;
+    router.subscribe('obs', (change) => {
+      for (const row of change.add || []) routedReadings.set(String(row.id), row);
+      for (const row of change.update || []) routedReadings.set(String(row.id), row);
+      for (const gone of change.remove || []) {
+        routedReadings.delete(String(gone && gone.id !== undefined ? gone.id : gone));
+      }
+      built.routedCounts.obs = routedReadings.size;
+      /* One rebuild a turn: a scrub delivers its whole diff in one call, but a
+         selection change and a redraw can arrive together. */
+      if (readingsPending) return;
+      readingsPending = Promise.resolve().then(() => {
+        readingsPending = null;
+        rebuildReadings();
+        describeSelection();
+      });
     });
 
-    /* A fourth viewer of the same partition that is not a grid at all: it keeps
-       the count under the chart, off the same keyed diff the grids get. */
-    const readingLine = el('p', 'chart-note');
-    router.subscribe('obs', (change) => {
-      built.routedCounts.obs += (change.add ? change.add.length : 0) - (change.remove ? change.remove.length : 0);
-      describeSelection();
-    });
+    /**
+     * Turn the routed readings into one row a month, a column per series.
+     *
+     * @returns {void}
+     */
+    function rebuildReadings() {
+      const chosen = new Set(selectedSeries());
+      const byDate = new Map();
+      for (const row of routedReadings.values()) {
+        if (!chosen.has(row.s)) continue;
+        let out = byDate.get(row.d);
+        if (!out) { out = { d: row.d }; byDate.set(row.d, out); }
+        out[row.s] = row.v;
+      }
+      const rows = [...byDate.values()].sort((a, b) => (a.d < b.d ? 1 : -1));
+      observationsGrid.rows.load(rows);
+    }
+    built.rebuildReadings = rebuildReadings;
 
     /* The catalogue's selection filters what the other routes receive. */
     router.link(catalogueGrid, chartGrid, { from: 'sid', to: 's' });
     router.link(catalogueGrid, tileGrid, { from: 'sid', to: 's' });
-    router.link(catalogueGrid, observationsGrid, { from: 'sid', to: 's' });
 
     /*
      * The buffer has to be asked for before anything is applied, and asked for
@@ -686,6 +700,7 @@
       if (force && atEnd) router.live();
       sayWhen(rewindDates[at], atEnd);
       rebuildTiles();
+      rebuildReadings();
       drawChart();
     }
 
@@ -1199,6 +1214,7 @@
     catalogueGrid.on('selection:changed', () => {
       rebuildTiles();
       showSelectedColumns();
+      rebuildReadings();
       drawChart();
     });
 
@@ -1214,6 +1230,7 @@
 
     rebuildTiles();
     showSelectedColumns();
+    rebuildReadings();
     setMode('level');
     sayWhen(rewindDates[rewindDates.length - 1], true);
     built.applyRewind = applyRewind;
