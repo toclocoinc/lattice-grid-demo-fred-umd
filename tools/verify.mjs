@@ -778,14 +778,45 @@ try {
       after,
       rowAt800: firstVisible ? firstVisible.getAttribute('data-index') : null,
       caption: (document.querySelector('.observations-tab .panel-caption') || {}).textContent || '',
+      /* How much of the panel is left over below the table. */
+      deadBand: panel ? Math.round(panel.getBoundingClientRect().bottom - pane.getBoundingClientRect().bottom) : null,
+      columns: [...root.querySelectorAll('[role="columnheader"]')].map((c) => {
+        const title = c.querySelector('.obs-head-title');
+        return {
+          id: c.getAttribute('data-col'),
+          width: Math.round(c.getBoundingClientRect().width),
+          clipped: title ? title.scrollWidth > title.clientWidth + 1 : false,
+        };
+      }),
+      bodyScrollsSideways: body.scrollWidth > body.clientWidth + 1,
     };
   })()`);
   console.log(`  readings table: pane ${scroll.paneHeight}px, body ${scroll.clientHeight}px of ${scroll.scrollHeight}px scrollable; `
     + `scrollTop ${scroll.before.top} -> ${scroll.after.top}, first row at that point ${scroll.rowAt800}`);
   console.log(`  its panel: ${scroll.panelClientHeight}px of ${scroll.panelScrollHeight}px`);
   check(scroll.found, 'the readings table is on the readings tab');
-  check(scroll.paneHeight > 380 && scroll.paneHeight < 470, 'the readings table has a stated height of its own',
-    `${scroll.paneHeight}px`);
+  check(scroll.paneHeight > 380, 'the readings table has a height of its own', `${scroll.paneHeight}px`);
+  check(scroll.deadBand !== null && scroll.deadBand <= 16,
+    'the table fills its panel, with no empty band under it',
+    `${scroll.deadBand}px left over below the table`);
+
+  /* ---- the month column takes 120px and the series share the rest ---- */
+
+  const monthColumn = scroll.columns.find((c) => c.id === 'd');
+  const seriesColumns = scroll.columns.filter((c) => c.id !== 'd');
+  console.log(`  column widths: ${scroll.columns.map((c) => `${c.id} ${c.width}px`).join(', ')}`);
+  check(monthColumn && monthColumn.width >= 110 && monthColumn.width <= 135,
+    'the month column keeps to the width a month needs', `${monthColumn && monthColumn.width}px`);
+  check(seriesColumns.length > 0 && seriesColumns.every((c) => c.width >= 140),
+    'every series column gets at least the width its two-line heading needs',
+    seriesColumns.map((c) => `${c.id} ${c.width}`).join(', '));
+  const widest = Math.max(...seriesColumns.map((c) => c.width));
+  check(monthColumn.width < widest, 'and the spare width goes to the series, not to the month',
+    `month ${monthColumn.width}px against the widest series column at ${widest}px`);
+  const cut = seriesColumns.filter((c) => c.clipped);
+  check(cut.length === 0, 'no series heading is cut short at this width', cut.map((c) => c.id).join(', '));
+  check(!scroll.bodyScrollsSideways, 'four series fit across without a sideways scroll',
+    `scrollWidth vs clientWidth`);
   check(scroll.scrollHeight > scroll.clientHeight, 'the readings table has more rows than it can show at once',
     `${scroll.scrollHeight} > ${scroll.clientHeight}`);
   check(scroll.after.top > 0, 'scrolling the readings table moves its own rows',

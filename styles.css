@@ -435,9 +435,8 @@ body {
 }
 
 .observations-tab .grid-pane {
-  flex: 0 0 auto;
-  height: 420px;
-  min-height: 0;
+  flex: 1 1 auto;
+  min-height: 320px;
 }
 
 /* Two lines in a heading: the series' name, and FRED's reference beneath it. */

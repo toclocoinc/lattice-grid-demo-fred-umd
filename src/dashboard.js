@@ -204,7 +204,9 @@
         type: 'date',
         format: { type: 'date', pattern: 'MMM yyyy' },
         filter: { enabled: false },
-        layout: fixedLayout({ width: 120, pin: 'start' }),
+        /* A month is a month: it needs 120px and never more, so the width it
+           does not need belongs to the series columns beside it. */
+        layout: fixedLayout({ width: 120, pin: 'start', resizable: false }),
       },
     ];
     for (const row of catalogue) {
@@ -232,7 +234,20 @@
         type: 'number',
         filter: { enabled: false },
         format: { type: 'number', decimals: 2 },
-        layout: fixedLayout({ width: 150, hidden: true }),
+        /*
+         * The series columns share whatever the month column leaves, down to a
+         * floor of 140px, which is what a two-line heading needs to be read
+         * rather than ellipsised. Past six or so ticked series the floor wins
+         * and the table scrolls sideways, which is the right answer: a heading
+         * cut to "Real gross ..." tells a reader nothing.
+         *
+         * Declared rather than fitted. `columns.fit()` shares the spare width
+         * in proportion to the widths the columns already have, which handed
+         * almost all of it to whichever column started widest; `flex` is the
+         * declarative form and does not need re-issuing every time a box is
+         * ticked.
+         */
+        layout: fixedLayout({ width: 150, min: 140, flex: 1, hidden: true }),
       });
     }
     return columns;
@@ -920,7 +935,6 @@
             pane.append(observationsPane);
             element.append(pane);
             observationsGrid.rows.refresh({ force: true });
-            observationsGrid.columns.fit();
             return observationsGrid;
           },
           config: {},
@@ -941,7 +955,6 @@
            Asking it to lay out again once it is on screen is all it needs. */
         window.requestAnimationFrame(() => {
           observationsGrid.rows.refresh({ force: true });
-          observationsGrid.columns.fit();
           if (built.vintages) built.vintages.reveal();
         });
       },
@@ -989,10 +1002,6 @@
       for (const row of data.catalogue) (chosen.has(row.sid) ? show : hide).push(row.sid);
       if (hide.length) observationsGrid.columns.hide(hide);
       if (show.length) observationsGrid.columns.show(show);
-      /* A handful of columns in a wide panel leaves most of it blank, and the
-         set changes every time the reader ticks a box, so the fit is asked for
-         again each time rather than once at build. */
-      if (observationsGrid.element && observationsGrid.element.isConnected) observationsGrid.columns.fit();
     }
 
     rebuildTiles();
