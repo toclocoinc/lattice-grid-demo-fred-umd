@@ -141,5 +141,15 @@ export const RECESSION = {
   source: 'Federal Reserve Bank of St. Louis, from NBER business cycle dates',
 };
 
-/** The series the page opens with selected. */
-export const DEFAULT_SELECTION = ['A191RL1Q225SBEA', 'UNRATE', 'CPIAUCSL', 'FEDFUNDS', 'DGS10'];
+/**
+ * The series the page opens with selected.
+ *
+ * Three rates and one level. The three rates share a scale and sit between
+ * zero and twenty, which is a chart with something to look at; the quarterly
+ * growth rate, which opened the page before, swings thirty points either side
+ * of zero in 2020 and flattens everything else against the axis. Real GDP is
+ * the level in the set: it is in a different unit, so the chart names it in
+ * the footnote and the unit picker offers it, and it is on the tiles and in
+ * the readings table either way.
+ */
+export const DEFAULT_SELECTION = ['GDPC1', 'UNRATE', 'FEDFUNDS', 'DGS10'];

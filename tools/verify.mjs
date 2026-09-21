@@ -482,6 +482,17 @@ try {
 
   /* ---- a change in a rate is points, never a percentage of the rate ---- */
 
+  /*
+   * Which series carries the rate rule and which carries the level rule is read
+   * out of the selection rather than written down, so the same checks hold
+   * after a refresh changes what the page opens on.
+   */
+  const rateSeries = loaded.selected.find((sid) => isRateSeries((catalogue.find((r) => r.id === sid) || {}).units));
+  const levelSeries = loaded.selected.find((sid) => !isRateSeries((catalogue.find((r) => r.id === sid) || {}).units));
+  check(!!rateSeries && !!levelSeries,
+    'the default selection holds a rate and a level, so both halves of the rule are on screen',
+    `rate ${rateSeries}, level ${levelSeries}`);
+
   const rateRule = await evaluate(`(() => {
     const d = window.__fredDemo;
     const tile = (id) => {
@@ -491,39 +502,37 @@ try {
       return {
         label: model && model.label,
         value: model && model.value,
-        formatted: model && model.formatted,
         delta: model ? model.delta : undefined,
         deltaPercent: model ? model.deltaPercent : undefined,
-        deltaFormatted: model ? model.deltaFormatted : undefined,
         text: fig ? fig.textContent : null,
       };
     };
-    return { rate: tile('UNRATE__latest'), level: tile('CPIAUCSL__latest') };
+    return { rate: tile('${rateSeries}__latest'), level: tile('${levelSeries}__latest') };
   })()`);
-  const unrateLatest = latestOf('UNRATE');
-  const unrateAgo = valueAt('UNRATE', yearBefore(unrateLatest.d));
-  const unratePoints = unrateLatest.v - unrateAgo;
-  console.log(`  UNRATE tile label: ${JSON.stringify(rateRule.rate.label)}; text "${rateRule.rate.text}"`);
-  console.log(`  CPIAUCSL tile: delta ${rateRule.level.delta}, deltaPercent ${rateRule.level.deltaPercent}`);
+  const rateLatest = latestOf(rateSeries);
+  const rateAgo = valueAt(rateSeries, yearBefore(rateLatest.d));
+  const ratePoints = rateLatest.v - rateAgo;
+  console.log(`  ${rateSeries} tile label: ${JSON.stringify(rateRule.rate.label)}; text "${rateRule.rate.text}"`);
+  console.log(`  ${levelSeries} tile: delta ${rateRule.level.delta}, deltaPercent ${rateRule.level.deltaPercent}`);
   check(/percentage points|\bpp\b/i.test(rateRule.rate.label || ''),
-    'the UNRATE tile states its year-on-year movement in percentage points', rateRule.rate.label);
-  check((rateRule.rate.label || '').includes(`${unratePoints > 0 ? '+' : ''}${unratePoints.toFixed(2)} pp`),
+    `the ${rateSeries} tile states its year-on-year movement in percentage points`, rateRule.rate.label);
+  check((rateRule.rate.label || '').includes(`${ratePoints > 0 ? '+' : ''}${ratePoints.toFixed(2)} pp`),
     'and that is the change in points, not a percentage of the rate',
-    `label ${JSON.stringify(rateRule.rate.label)}, expected ${unratePoints.toFixed(2)} pp `
-      + `(a percentage would be ${((unratePoints) / unrateAgo) * 100})`);
-  check(!/%/.test(rateRule.rate.text || ''), 'the UNRATE tile shows no % anywhere', rateRule.rate.text);
+    `label ${JSON.stringify(rateRule.rate.label)}, expected ${ratePoints.toFixed(2)} pp `
+      + `(a percentage would be ${(ratePoints / rateAgo) * 100})`);
+  check(!/%/.test(rateRule.rate.text || ''), `the ${rateSeries} tile shows no % anywhere`, rateRule.rate.text);
   check(rateRule.rate.delta === null,
-    'the UNRATE tile draws no relative movement line, so no percentage of a rate is shown',
+    `the ${rateSeries} tile draws no relative movement line, so no percentage of a rate is shown`,
     `delta ${rateRule.rate.delta}`);
 
   /* And a level series keeps the panel's own movement line, so the rule is a
      rule and not a blanket removal. */
-  const cpiLatest = latestOf('CPIAUCSL');
-  const cpiAgo = valueAt('CPIAUCSL', yearBefore(cpiLatest.d));
-  check(near(rateRule.level.delta, cpiLatest.v - cpiAgo, 1e-9),
+  const levelLatest = latestOf(levelSeries);
+  const levelAgo = valueAt(levelSeries, yearBefore(levelLatest.d));
+  check(near(rateRule.level.delta, levelLatest.v - levelAgo, 1e-9),
     'a level series keeps its movement line, against the reading a year earlier',
-    `delta ${rateRule.level.delta}, expected ${cpiLatest.v - cpiAgo}`);
-  check(near(rateRule.level.deltaPercent * 100, ((cpiLatest.v - cpiAgo) / cpiAgo) * 100, 1e-9),
+    `delta ${rateRule.level.delta}, expected ${levelLatest.v - levelAgo}`);
+  check(near(rateRule.level.deltaPercent * 100, ((levelLatest.v - levelAgo) / levelAgo) * 100, 1e-9),
     'and its percentage is the percentage of a level, which is the right reading',
     `${rateRule.level.deltaPercent * 100}%`);
   check(!/pp\b/.test(rateRule.level.label || ''), 'a level series is not given a points line', rateRule.level.label);
@@ -538,7 +547,7 @@ try {
     return {
       columns: d.catalogueGrid.columns.visible().map((c) => c.id),
       bad, rateWithPercent, levelWithPoints,
-      unrate: rows.find((r) => r.sid === 'UNRATE'),
+      chosen: rows.find((r) => r.sid === '${rateSeries}'),
     };
   })()`);
   check(catalogueUnits.bad.length === 0, 'no catalogue row fills both year-on-year columns', catalogueUnits.bad.join(', '));
@@ -546,9 +555,9 @@ try {
     catalogueUnits.rateWithPercent.join(', '));
   check(catalogueUnits.levelWithPoints.length === 0, 'no level series is given a year-on-year in points',
     catalogueUnits.levelWithPoints.join(', '));
-  check(near(catalogueUnits.unrate.yoyPoints, unrateLatest.v - unrateAgo, 1e-9),
-    "the catalogue's UNRATE year-on-year is the change in points",
-    `${catalogueUnits.unrate.yoyPoints}`);
+  check(near(catalogueUnits.chosen.yoyPoints, ratePoints, 1e-9),
+    `the catalogue's ${rateSeries} year-on-year is the change in points`,
+    `${catalogueUnits.chosen.yoyPoints}`);
 
   /* ---- no em dash in anything a reader sees ---- */
 
@@ -590,7 +599,9 @@ try {
   check(chart.empty === false, 'the chart is not showing its empty state');
 
   /* One series' points are checked against the saved readings. */
-  const firstSeries = loaded.selected[0];
+  /* A series the chart actually drew: in level mode only one unit group is on
+     the axis, so the first selected series is not always one of them. */
+  const firstSeries = chart.series[0].key;
   const plotted = await evaluate(`(() => {
     const s = window.__fredDemo.chart.data().series.find((x) => x.key === ${JSON.stringify(firstSeries)});
     if (!s) return null;
