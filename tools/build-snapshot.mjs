@@ -469,7 +469,15 @@ async function main() {
     if (MODE === 'keyed') {
       const record = await readSeriesRecord(entry.id);
       refuseRestricted(entry.id, record.notes);
-      row.title = record.title || row.title;
+      /*
+       * FRED's own title is kept, but beside the curated one rather than over
+       * it. "Market Yield on U.S. Treasury Securities at 10-Year Constant
+       * Maturity, Quoted on an Investment Basis" is the right name for a
+       * citation and the wrong one for a tile or a column heading, and a page
+       * that reads differently depending on which mode built its data is not
+       * one snapshot in two shapes. The official name is on the tooltip.
+       */
+      row.officialTitle = record.title || null;
       row.units = record.units || row.units;
       row.frequency = record.frequency || row.frequency;
       row.seasonal = record.seasonal_adjustment || row.seasonal;
@@ -478,6 +486,7 @@ async function main() {
       say(`  described ${entry.id}`);
       await pause(200);
     } else {
+      row.officialTitle = null;
       row.lastUpdated = null;
       row.notes = null;
     }

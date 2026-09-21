@@ -177,6 +177,7 @@
         id: `S:${row.id}`,
         sid: row.id,
         title: row.title,
+        officialTitle: row.officialTitle || null,
         category: row.category,
         units: row.units,
         unitGroup: row.unitGroup,

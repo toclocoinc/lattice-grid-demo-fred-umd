@@ -471,7 +471,7 @@ body {
   display: flex;
   flex: 0 0 auto;
   flex-direction: column;
-  height: 700px;
+  height: 560px;
   overflow: hidden;
   padding: 10px 12px 12px;
 }
@@ -522,12 +522,12 @@ body {
 }
 
 .vintage-pane .chart-box.tall {
-  height: 280px;
+  height: 260px;
 }
 
 .vintage-pane .grid-pane {
   flex: 0 0 auto;
-  height: 280px;
+  height: 260px;
   min-height: 0;
 }
 
@@ -645,7 +645,7 @@ body {
   }
 
   #app .tabs-host {
-    height: 820px;
+    height: 660px;
   }
 
   .vintage-slider {

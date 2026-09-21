@@ -57,7 +57,7 @@
         title: 'Reading for',
         type: 'date',
         format: { type: 'date', pattern: 'MMM yyyy' },
-        filter: { type: 'date', enabled: false },
+        filter: { enabled: false },
         layout: { width: 130, pin: 'start', movable: false },
       },
       {
@@ -65,6 +65,7 @@
         field: 'first',
         title: `First published (${units})`,
         type: 'number',
+        filter: { enabled: false },
         format: { type: 'number', decimals: 2 },
         layout: { width: 200, movable: false },
       },
@@ -73,6 +74,7 @@
         field: 'firstVintage',
         title: 'First published on',
         type: 'date',
+        filter: { enabled: false },
         format: { type: 'date', pattern: 'd MMM yyyy' },
         layout: { width: 160, movable: false },
       },
@@ -81,6 +83,7 @@
         field: 'latest',
         title: `As it stands now (${units})`,
         type: 'number',
+        filter: { enabled: false },
         format: { type: 'number', decimals: 2 },
         layout: { width: 200, movable: false },
       },
@@ -91,6 +94,7 @@
            a level or an index is a number in that series' own units. */
         title: rate ? 'Revision, percentage points' : 'Revision',
         type: 'number',
+        filter: { enabled: false },
         format: rate
           ? { type: 'number', decimals: 2, suffix: ' pp', signed: true }
           : { type: 'number', decimals: 2, signed: true },
@@ -106,6 +110,7 @@
         field: 'revisionPct',
         title: 'Revision %',
         type: 'number',
+        filter: { enabled: false },
         format: { type: 'number', decimals: 1, suffix: '%', signed: true },
         cell: { decoration: { type: 'bar', min: -20, max: 20, origin: 0 } },
         layout: { width: 160, movable: false },

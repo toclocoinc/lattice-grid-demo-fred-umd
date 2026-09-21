@@ -967,10 +967,10 @@ try {
     return { min: Number(el.min), max: Number(el.max), value: Number(el.value), dates: window.__fredDemo.vintages.dates.length };
   })()`);
   console.log(`  slider: ${slider.dates} vintage dates, position ${slider.value} of ${slider.max}`);
-  check(slider.dates === (meta.counts.vintageDates[vintage.series_] !== undefined
-    ? vintages.filter((v) => v.series === vintage.series_).length
-    : slider.dates),
-    'the slider offers every vintage the snapshot saved for the series', `${slider.dates}`);
+  const savedVintages = vintages.filter((v) => v.series === vintage.series_).length;
+  check(slider.dates === savedVintages,
+    'the slider offers every vintage the snapshot saved for the series',
+    `${slider.dates}, expected ${savedVintages}`);
   check(slider.max === slider.dates - 1 && slider.min === 0,
     'the slider spans exactly those vintages', `${slider.min}..${slider.max} for ${slider.dates}`);
 
