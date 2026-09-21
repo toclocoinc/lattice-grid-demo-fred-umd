@@ -701,7 +701,18 @@
       sayWhen(rewindDates[at], atEnd);
       rebuildTiles();
       rebuildReadings();
-      drawChart();
+      /*
+       * The chart is NOT rebuilt here. It is bound to its grid and redraws
+       * itself once, on the next frame, with whatever the scrub left there --
+       * and its spec has not changed, because a rewind moves the data and not
+       * the transformation, the unit or the series. Rebuilding it as well drew
+       * the same step twice, one frame apart: the line landed a few pixels low
+       * and taller, then corrected. Measured at 1100px over a play-through,
+       * every step showed the pair 18 to 20 ms apart with the plot rectangle
+       * and the value axis identical in both, which is what "it jumps down
+       * then back" was.
+       */
+      describeSelection();
     }
 
     const rewind = root.FredDemo.createTimeline({

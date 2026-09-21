@@ -61,6 +61,12 @@ body {
 
 .head-note {
   align-items: center;
+  /*
+   * Room for the longer of the two sentences this line ever holds. Without it
+   * the line grew by one when the page was first rewound and everything below
+   * it, the chart included, stepped down three pixels.
+   */
+  min-height: 34px;
   color: var(--ink-soft);
   display: flex;
   flex-wrap: wrap;

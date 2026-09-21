@@ -1122,6 +1122,69 @@ try {
       `${rewound.after.tile}, expected ${expectedThen.v}`);
   }
 
+  /*
+   * A step of the timeline must not make the chart move. Sampled every frame
+   * for most of a second: the plot rectangle (where the value axis puts its
+   * ticks), the axis domain, and the height of everything above the chart. One
+   * step used to paint twice, a frame apart, the line landing low and tall and
+   * then correcting.
+   */
+  const steady = await evaluate(`(async () => {
+    const d = window.__fredDemo;
+    const read = () => {
+      const box = document.querySelector('.chart-section .chart-box');
+      const svg = box && box.querySelector('svg');
+      const yT = svg ? [...svg.querySelectorAll('text.lat-chartview__tick')]
+        .filter((t) => Number(t.getAttribute('x')) < 60) : [];
+      const line = svg ? svg.querySelector('path.lat-chartview__line') : null;
+      const lb = line ? line.getBoundingClientRect() : null;
+      const h = (sel) => { const e = document.querySelector(sel); return e ? Math.round(e.getBoundingClientRect().height) : null; };
+      return {
+        plotTop: yT.length ? Math.round(Number(yT[0].getAttribute('y'))) : null,
+        plotBottom: yT.length ? Math.round(Number(yT[yT.length - 1].getAttribute('y'))) : null,
+        domain: yT.length ? yT[0].textContent + '..' + yT[yT.length - 1].textContent : null,
+        above: [h('.head'), h('.kpi-host'), h('.rewind')].join('/'),
+        lineTop: lb ? Math.round(lb.top) : null,
+      };
+    };
+    /* Park a few steps in, and take the reading after it has settled. */
+    d.rewind.goTo(d.rewind.dates().length - 6);
+    await new Promise((r) => setTimeout(r, 900));
+    const before = read();
+    const seen = [];
+    let running = true;
+    const tick = () => { if (!running) return; seen.push(read()); requestAnimationFrame(tick); };
+    requestAnimationFrame(tick);
+    d.rewind.goTo(d.rewind.index() + 1);
+    await new Promise((r) => setTimeout(r, 900));
+    running = false;
+    const after = read();
+    const key = (f) => [f.plotTop, f.plotBottom, f.domain, f.above].join('|');
+    const wanted = key(before);
+    const moved = seen.filter((f) => key(f) !== wanted);
+    const lineTops = seen.map((f) => f.lineTop).filter((v) => v != null);
+    return {
+      before, after, frames: seen.length, moved: moved.length, first: moved[0] || null,
+      lineSpread: lineTops.length ? Math.max(...lineTops) - Math.min(...lineTops) : 0,
+    };
+  })()`);
+  console.log(`  a timeline step, sampled over ${steady.frames} frames: ${steady.moved} of them differ from the settled `
+    + `geometry; the drawn line moved ${steady.lineSpread}px`);
+  console.log(`    before ${JSON.stringify(steady.before)}`);
+  console.log(`    after  ${JSON.stringify(steady.after)}`);
+  check(steady.frames > 10, 'the step was sampled across frames', `${steady.frames}`);
+  check(steady.before.domain === steady.after.domain,
+    'a timeline step leaves the value axis where it was', `${steady.before.domain} -> ${steady.after.domain}`);
+  check(steady.before.plotTop === steady.after.plotTop && steady.before.plotBottom === steady.after.plotBottom,
+    'and the plot rectangle where it was',
+    `${steady.before.plotTop}..${steady.before.plotBottom} -> ${steady.after.plotTop}..${steady.after.plotBottom}`);
+  check(steady.before.above === steady.after.above,
+    'and everything above the chart the height it was', `${steady.before.above} -> ${steady.after.above}`);
+  check(steady.moved === 0,
+    'and no frame in between paints a different geometry',
+    `${steady.moved} of ${steady.frames} frames differ; first ${JSON.stringify(steady.first)}`);
+  check(steady.lineSpread <= 2, 'the drawn line does not jump and come back', `${steady.lineSpread}px`);
+
   await shoot('05-rewound');
 
   /* Back to today restores every one of them. */
