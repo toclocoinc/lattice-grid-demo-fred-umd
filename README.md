@@ -160,8 +160,13 @@ slider calls `scrubTo(date, { by: 'time' })` and the router rebuilds the grid,
 through the same keyed diff, to exactly what had been published by then.
 `live()` returns to the newest vintage.
 
-It opens on real GDP growth as it stood on **1 August 2020**, which is the
-advance estimate of the second quarter of 2020.
+It opens on the day the chosen series' **biggest revision was first published**,
+worked out from the data rather than written down: for real GDP growth that is
+the advance estimate of the second quarter of 2020, announced as an annualised
+fall of 32.9% and now read as 28%. A fixed date could not do that job, because a
+keyless snapshot asks ALFRED on a list of days chosen in `tools/series.mjs`
+while a keyed one uses the days FRED actually revised the series on, and the two
+lists share almost no dates.
 
 ## The data
 
@@ -261,6 +266,14 @@ commits `data/snapshot/` when it changed. It passes `FRED_API_KEY` from the
 repository secrets; with no secret set it simply runs in the keyless mode and
 still succeeds.
 
+It then asks for a publish explicitly, with `gh workflow run pages.yml`. That
+step is not a convenience: a push made with the automatic `GITHUB_TOKEN` does
+not start any other workflow (GitHub's own guard against a workflow triggering
+itself for ever), so without it the refresh would commit a new copy and the
+published page would go on serving the old one until somebody noticed. The step
+runs only when there was actually a commit to publish, which is what the
+`actions: write` permission is for.
+
 ## Checking it
 
 ```
@@ -291,9 +304,13 @@ leaving the global it documents. It then, in a real browser:
   revisions table for `UNRATE` shows no revision-percentage column;
 - insists no visible text anywhere on the page contains an em dash;
 - opens the vintages tab and insists the overlay chart draws two series, the
-  revisions table paints rows, the router's buffer holds the revision history,
-  the view opens rewound, the number on screen is the number ALFRED holds for
-  that day, and that it has actually been revised since;
+  revisions table paints rows, the router's buffer holds the revision history
+  and the view opens rewound. It recomputes the series' biggest revision from
+  the saved files and insists the page opened on the very day that revision was
+  first published, that both numbers on screen are the numbers ALFRED holds, and
+  that the largest-revision tile reports exactly that figure;
+- insists the slider spans every vintage the snapshot saved, whether that is the
+  35 of a keyless build or the 120-odd of a keyed one;
 - rewinds to the earliest vintage and insists readings published later really
   disappear, then returns to today;
 - checks nothing anywhere on the page reads "NaN";

@@ -216,11 +216,19 @@ body {
  * stops a row of tiles stepping up and down as one of them loses its movement
  * line.
  */
+/*
+ * A stated height, not a minimum. A minimum makes a row of tiles as tall as the
+ * longest label in it, which means one series with a name a word longer than
+ * the rest leaves every tile beside it a pixel short -- and FRED's own titles
+ * are longer than the short ones in the curated list, so the row changed height
+ * the first time the snapshot was rebuilt with a key. A number here is a row of
+ * tiles that is the same height whatever is in it.
+ */
 .kpi-strip .lat-kpi__tile {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 10px;
-  min-height: 92px;
+  height: 108px;
   padding: 10px 12px;
 }
 
@@ -235,8 +243,21 @@ body {
   text-overflow: clip;
 }
 
+/*
+ * A tile's label is one line for a level (the panel writes the movement line
+ * itself) and two for a rate, whose movement is in points and has to be said
+ * here. `pre-line` is what lets the second line be a second line.
+ */
 .kpi-strip .lat-kpi__label {
-  white-space: normal;
+  white-space: pre-line;
+}
+
+.kpi-host {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
 }
 
 .kpi-panel {
@@ -387,6 +408,62 @@ body {
  * one, so a rule of equal weight here would lose; `#app` in front of the class
  * is what gives this one the last word on how tall the strip is.
  */
+/*
+ * A caption: one plain sentence under a panel's title saying what is in it.
+ */
+.panel-caption {
+  color: var(--ink-soft);
+  font-size: 12px;
+  margin: 0;
+}
+
+/*
+ * The readings tab.
+ *
+ * The tab module lays its panels out absolutely, so a child of one inherits no
+ * height at all. A grid put straight into a panel therefore grows to the height
+ * of every row it holds and the panel scrolls the whole table instead of the
+ * table scrolling its own rows: no scrollbar on the grid, no way to reach row
+ * 400, and a heading that leaves the screen. A stated height on the wrapper is
+ * what gives the grid a viewport to virtualise into.
+ */
+.observations-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+}
+
+.observations-tab .grid-pane {
+  flex: 0 0 auto;
+  height: 420px;
+  min-height: 0;
+}
+
+/* Two lines in a heading: the series' name, and FRED's reference beneath it. */
+.obs-head {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+  min-width: 0;
+}
+
+.obs-head-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.obs-head-id {
+  color: var(--ink-soft);
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 #app .tabs-host {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -394,7 +471,7 @@ body {
   display: flex;
   flex: 0 0 auto;
   flex-direction: column;
-  height: 820px;
+  height: 700px;
   overflow: hidden;
   padding: 10px 12px 12px;
 }
@@ -444,9 +521,14 @@ body {
   min-width: 0;
 }
 
+.vintage-pane .chart-box.tall {
+  height: 280px;
+}
+
 .vintage-pane .grid-pane {
-  flex: 1 1 auto;
-  min-height: 300px;
+  flex: 0 0 auto;
+  height: 280px;
+  min-height: 0;
 }
 
 .tab-bar {
@@ -563,7 +645,7 @@ body {
   }
 
   #app .tabs-host {
-    height: 900px;
+    height: 820px;
   }
 
   .vintage-slider {

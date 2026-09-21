@@ -41,6 +41,9 @@
     { id: 'index', label: 'Index, 100 at', field: 'idx' },
   ];
 
+  /** How many tiles a reader is asked to take in at once. */
+  const MAX_TILES = 6;
+
   /** What a change in a rate series is measured in. */
   const POINTS = 'Percentage points';
   /** What a change in a level or an index is measured in. */
@@ -93,8 +96,8 @@
         field: 'title',
         title: 'Series',
         cell: { render: 'twoline', props: { secondary: 'units' } },
-        filter: { type: 'text' },
-        layout: { width: 300, pin: 'start' },
+        filter: { type: 'text', enabled: false },
+        layout: fixedLayout({ width: 300, pin: 'start' }),
       },
       {
         id: 'sid',
@@ -104,21 +107,21 @@
           render: 'link',
           props: { href: `${FRED_SERIES_URL}{{value}}`, target: '_blank' },
         },
-        filter: { type: 'text' },
-        layout: { width: 150 },
+        filter: { type: 'text', enabled: false },
+        layout: fixedLayout({ width: 150 }),
       },
-      { id: 'category', field: 'category', title: 'Category', filter: { type: 'set' }, layout: { width: 170 } },
-      { id: 'units', field: 'units', title: 'Units', filter: { type: 'set' }, layout: { width: 210 } },
-      { id: 'frequency', field: 'frequency', title: 'Frequency', filter: { type: 'set' }, layout: { width: 110 } },
-      { id: 'seasonal', field: 'seasonal', title: 'Seasonal adjustment', filter: { type: 'set' }, layout: { width: 220 } },
+      { id: 'category', field: 'category', title: 'Category', filter: { type: 'set', enabled: false }, layout: fixedLayout({ width: 170 }) },
+      { id: 'units', field: 'units', title: 'Units', filter: { type: 'set', enabled: false }, layout: fixedLayout({ width: 210 }) },
+      { id: 'frequency', field: 'frequency', title: 'Frequency', filter: { type: 'set', enabled: false }, layout: fixedLayout({ width: 110 }) },
+      { id: 'seasonal', field: 'seasonal', title: 'Seasonal adjustment', filter: { type: 'set', enabled: false }, layout: fixedLayout({ width: 220 }) },
       {
         id: 'latestDate',
         field: 'latestDate',
         title: 'Latest reading',
         type: 'date',
         format: { type: 'date', pattern: 'MMM yyyy' },
-        filter: { type: 'date' },
-        layout: { width: 130 },
+        filter: { type: 'date', enabled: false },
+        layout: fixedLayout({ width: 130 }),
       },
       {
         id: 'latestValue',
@@ -126,7 +129,7 @@
         title: 'Latest value',
         type: 'number',
         format: { type: 'number', decimals: 2 },
-        layout: { width: 140 },
+        layout: fixedLayout({ width: 140 }),
       },
       {
         id: 'change',
@@ -135,7 +138,7 @@
         headerTooltip: "In the series' own units. For a series that is itself a rate, that is percentage points.",
         type: 'number',
         format: { type: 'number', decimals: 2, signed: true },
-        layout: { width: 190 },
+        layout: fixedLayout({ width: 190 }),
       },
       /*
        * Two columns for the year-on-year movement, not one, because one column
@@ -152,7 +155,7 @@
         type: 'number',
         format: { type: 'number', decimals: 2, suffix: ' pp', signed: true },
         cell: { decoration: { type: 'bar', min: -bars.points, max: bars.points, origin: 0 } },
-        layout: { width: 180 },
+        layout: fixedLayout({ width: 180 }),
       },
       {
         id: 'yoyPercent',
@@ -162,16 +165,16 @@
         type: 'number',
         format: { type: 'number', decimals: 1, suffix: '%', signed: true },
         cell: { decoration: { type: 'bar', min: -bars.percent, max: bars.percent, origin: 0 } },
-        layout: { width: 170 },
+        layout: fixedLayout({ width: 170 }),
       },
-      { id: 'source', field: 'source', title: 'Published by', filter: { type: 'set' }, layout: { width: 280 } },
+      { id: 'source', field: 'source', title: 'Published by', filter: { type: 'set', enabled: false }, layout: fixedLayout({ width: 280 }) },
       {
         id: 'readings',
         field: 'readings',
         title: 'Readings held',
         type: 'number',
         format: { type: 'number', decimals: 0 },
-        layout: { width: 130, hidden: true },
+        layout: fixedLayout({ width: 130, hidden: true }),
       },
     ];
   }
@@ -192,28 +195,69 @@
       {
         id: 'd',
         field: 'd',
-        title: 'Date',
+        title: 'Month',
         type: 'date',
         format: { type: 'date', pattern: 'MMM yyyy' },
-        filter: { type: 'date' },
-        layout: { width: 130, pin: 'start' },
+        filter: { type: 'date', enabled: false },
+        layout: fixedLayout({ width: 120, pin: 'start' }),
       },
     ];
     for (const row of catalogue) {
       columns.push({
         id: row.sid,
         field: row.sid,
-        title: row.sid,
-        headerTooltip: `${row.title} (${row.units})`,
+        /*
+         * The heading is the series' name. "A191RL1Q225SBEA" is FRED's filing
+         * reference and tells a reader nothing; it goes on a second line
+         * underneath, small, where it is there for anyone who wants to look the
+         * series up and invisible to anyone who does not.
+         */
+        title: row.title,
+        header: {
+          render: () => {
+            const wrap = document.createElement('span');
+            wrap.className = 'obs-head';
+            wrap.append(el('span', 'obs-head-title', row.title));
+            wrap.append(el('span', 'obs-head-id', row.sid));
+            return wrap;
+          },
+          tooltip: `${row.title}. FRED id ${row.sid}. Measured in ${row.units.toLowerCase()}, published ${row.frequency.toLowerCase()}.`,
+        },
         type: 'number',
         format: { type: 'number', decimals: 2 },
-        layout: { width: 130, hidden: true },
+        layout: fixedLayout({ width: 150, hidden: true }),
       });
     }
     return columns;
   }
 
-  /** The shared grid settings. The right-hand tool rail is off on every one. */
+  /**
+   * A column's layout, with the two things every column on this page agrees on.
+   *
+   * Nothing here is drag-reorderable. The columns are a designed order carrying
+   * a designed meaning, and a heading that offers to be dragged "to reorder, or
+   * onto the group bar" is offering something this page has no use for, on
+   * every hover, in front of the heading itself.
+   *
+   * @param {object} [extra] the column's own layout
+   * @returns {object} the layout to declare
+   */
+  function fixedLayout(extra) {
+    return Object.assign({ movable: false }, extra || {});
+  }
+
+  /**
+   * The shared grid settings.
+   *
+   * No right-hand tool rail, no column menu and no filter funnel: the heading
+   * keeps the sort arrow and nothing else, because the rest is furniture a
+   * reader did not ask for that trades places with the heading on hover.
+   * Filtering and sorting are still there through the API and the keyboard.
+   *
+   * @param {string} title the grid's title
+   * @param {object} [extra] the rest of the configuration
+   * @returns {object} the configuration
+   */
   function baseGridConfig(title, extra) {
     return Object.assign(
       {
@@ -221,7 +265,7 @@
         theme: 'light',
         density: 'compact',
         stripedRows: true,
-        columnMenu: true,
+        columnMenu: false,
         statusBar: true,
         find: true,
         title,
@@ -307,7 +351,20 @@
     const cataloguePane = el('div', 'grid-pane');
     const catalogueGrid = createGrid(cataloguePane, baseGridConfig('Series in this dashboard', {
       columns: catalogueColumns(barRanges(data.catalogue)),
-      selection: { mode: 'multiple', checkbox: true, headerCheckbox: true },
+      /*
+       * The checkbox is the only thing that selects. Clicking a cell used to
+       * draw a focus ring, start a cell range and offer a fill handle to drag,
+       * which is a spreadsheet's vocabulary offered on a table nobody is
+       * editing: it looks like something is about to happen, and nothing is.
+       */
+      selection: {
+        mode: 'multiple',
+        checkbox: true,
+        headerCheckbox: true,
+        checkboxOnly: true,
+        ranges: false,
+        fillHandle: false,
+      },
       sort: [{ col: 'category', dir: 'asc' }, { col: 'title', dir: 'asc' }],
     }));
     built.catalogueGrid = catalogueGrid;
@@ -316,6 +373,7 @@
        every transformation as a column of its own, so switching between them
        is a change of which column the chart plots rather than a reload. */
     const chartGrid = createGrid(el('div', 'grid-pane'), baseGridConfig('Readings', {
+      selection: 'none',
       columns: [
         { id: 's', field: 's', title: 'Series' },
         { id: 'd', field: 'd', title: 'Date', type: 'date' },
@@ -334,6 +392,7 @@
        chart narrows itself to one unit at a time and the tiles never should:
        two viewers of one partition, which is what `overlap` is for. */
     const tileGrid = createGrid(el('div', 'grid-pane hidden-grid'), baseGridConfig('Readings, for the tiles', {
+      selection: 'none',
       columns: [
         { id: 's', field: 's', title: 'Series' },
         { id: 'd', field: 'd', title: 'Date', type: 'date' },
@@ -350,6 +409,7 @@
     const observationsPane = el('div', 'grid-pane');
     const observationsGrid = createGrid(observationsPane, baseGridConfig('Every selected series, month by month', {
       rowKey: 'd',
+      selection: 'none',
       columns: observationColumns(data.catalogue),
       sort: [{ col: 'd', dir: 'desc' }],
     }));
@@ -446,9 +506,12 @@
 
     /* ---------------- the tiles ---------------- */
 
-    const kpiStrip = el('section', 'kpi-strip');
-    kpiStrip.setAttribute('aria-label', 'The selected series, latest');
-    host.append(kpiStrip);
+    const kpiHost = el('section', 'kpi-host');
+    kpiHost.setAttribute('aria-label', 'The selected series, latest');
+    const kpiCaption = el('p', 'panel-caption');
+    const kpiStrip = el('div', 'kpi-strip');
+    kpiHost.append(kpiStrip, kpiCaption);
+    host.append(kpiHost);
 
     /** The rows of one series, newest last, out of the chart grid's view. */
     function readingsOf(rows, sid) {
@@ -477,55 +540,53 @@
         built.kpi = null;
         return;
       }
+      /*
+       * One tile a series, and six at most. Two tiles each turned five series
+       * into ten cards and a wall of numbers; the year-on-year figure belongs
+       * under the figure it is a movement in, not beside it.
+       */
+      const shown = chosen.slice(0, MAX_TILES);
+      kpiCaption.textContent = chosen.length > MAX_TILES
+        ? `Tiles show the first six selected series, in catalogue order. `
+          + `${chosen.length - MAX_TILES} more are on the chart and in the table below.`
+        : 'Tiles show the first six selected series, in catalogue order.';
       const tiles = [];
-      for (const sid of chosen) {
+      for (const sid of shown) {
         const entry = data.byId.get(sid);
         const mine = readingsOf(tileGrid.rows.data(), sid);
-        const previous = mine.length > 1 ? mine[mine.length - 2] : null;
+        const latest = mine.length ? mine[mine.length - 1] : null;
+        const moved = latest && latest.yoyChange != null;
         /*
          * The movement line under a tile's figure is the panel's own, and it
          * draws the difference AND that difference as a percentage of the
-         * baseline together, with no way to ask for one without the other. A
-         * percentage of a rate is not a reading anyone wants (see
-         * `isRateSeries`), so a rate series is given no baseline at all and its
-         * movement is stated in points on the tile beside it. A level, a count
-         * or an index keeps both.
+         * baseline together, with no way to ask for one without the other.
          *
-         * No baseline either where there is no period before this one: an arrow
-         * pointing at nothing is worse than no arrow.
+         * For a level, a count or an index that is exactly right, so the
+         * baseline is the reading a year earlier and the panel writes the line.
+         * For a series that is itself a rate a percentage of the rate is not a
+         * reading anyone wants (see `isRateSeries`), so no baseline is given and
+         * the movement is written into the tile's own second line, in points.
          */
-        const baseline = !entry.rate && previous ? { baseline: previous.v } : {};
+        const points = moved && entry.rate
+          ? `\n${latest.yoyChange > 0 ? '+' : ''}${latest.yoyChange.toFixed(2)} pp on a year earlier`
+          : '';
         tiles.push({
           id: `${sid}__latest`,
-          label: `${entry.title}: ${entry.units.toLowerCase()}`,
+          label: `${entry.title}: ${entry.units.toLowerCase()}${points}`,
           aggregation: 'custom',
           format: { type: 'compact', decimals: 2 },
           compute: (rows) => {
             const list = readingsOf(rows, sid);
             return list.length ? list[list.length - 1].v : null;
           },
-          ...baseline,
-        });
-        tiles.push({
-          id: `${sid}__yoy`,
-          label: entry.rate
-            ? `${entry.title}: on a year earlier, percentage points`
-            : `${entry.title}: on a year earlier, per cent`,
-          aggregation: 'custom',
-          format: { type: 'number', decimals: entry.rate ? 2 : 1 },
-          compute: (rows) => {
-            const list = readingsOf(rows, sid);
-            if (!list.length) return null;
-            const latest = list[list.length - 1];
-            return entry.rate ? latest.yoyChange : latest.yoy;
-          },
+          ...(!entry.rate && moved ? { baseline: latest.v - latest.yoyChange } : {}),
         });
       }
       built.kpi = createKPI(kpiStrip, {
         grid: tileGrid,
         rowKey: 'id',
         fields: ['s', 'd', 'v', 'yoy', 'yoyChange', 'rate'],
-        columns: Math.min(4, tiles.length),
+        columns: Math.min(MAX_TILES, tiles.length),
         ariaLabel: 'The selected series, latest',
         tiles,
       });
@@ -831,7 +892,26 @@
           /* The body is a grid this page already built and routes rows to, so
              the factory mounts it rather than making a second one. */
           view: (element) => {
-            element.append(observationsPane);
+            /*
+             * A wrapper with a height of its own. The tab module lays its
+             * panels out absolutely, which gives a child no height to inherit,
+             * so a grid put straight into one grows to the height of all 681 of
+             * its rows and the panel scrolls instead of the table. A stated
+             * height is what gives the grid a viewport to virtualise into and a
+             * scrollbar of its own.
+             */
+            const pane = el('div', 'observations-tab');
+            pane.append(
+              el(
+                'p',
+                'panel-caption',
+                'One row a month, newest first, and a column for each series you have ticked. '
+                  + 'A quarterly series shows its value in the first month of each quarter, so a blank cell '
+                  + 'is a month that series does not publish in, not a missing number.',
+              ),
+            );
+            pane.append(observationsPane);
+            element.append(pane);
             observationsGrid.rows.refresh({ force: true });
             observationsGrid.columns.fit();
             return observationsGrid;

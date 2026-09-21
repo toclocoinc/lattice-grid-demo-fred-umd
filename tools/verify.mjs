@@ -318,6 +318,10 @@ try {
   /* 1. The page.                                                         */
   /* =================================================================== */
 
+  console.log(`  snapshot: built ${meta.builtAt} in ${meta.mode} mode; `
+    + `${catalogue.length} series, ${observations.length} readings, ${vintages.length} vintage records`);
+  console.log(`  vintage dates per headline series: ${JSON.stringify(meta.counts.vintageDates)}`);
+
   await open(`${origin}/index.html`, 'the dashboard');
 
   /* ---- how the library arrived ---- */
@@ -447,24 +451,28 @@ try {
     const models = d.kpi.tiles().map((t) => ({ id: t.id, value: t.value, formatted: t.formatted, status: String(t.status) }));
     const painted = [...document.querySelectorAll('.kpi-strip .lat-kpi__value')].map((e) => ({
       text: e.textContent,
+      top: Math.round((e.closest('.lat-kpi__tile') || e).getBoundingClientRect().top),
       clipped: e.scrollWidth > e.clientWidth + 1,
       bg: getComputedStyle(e.closest('.lat-kpi__tile') || e).backgroundColor,
       height: Math.round((e.closest('.lat-kpi__tile') || e).getBoundingClientRect().height),
     }));
-    return { models, painted, tiles: d.kpi.tiles().length };
+    return {
+      models, painted, tiles: d.kpi.tiles().length,
+      caption: (document.querySelector('.kpi-host .panel-caption') || {}).textContent || '',
+      rows: new Set(painted.map((p) => p.top)).size,
+    };
   })()`);
   console.log(`  ${tiles.tiles} tiles; values: ${tiles.painted.map((p) => p.text).join(', ')}`);
-  check(tiles.tiles === loaded.selected.length * 2, 'two tiles for each selected series', `${tiles.tiles} for ${loaded.selected.length}`);
-  for (const sid of loaded.selected) {
+  const expectedTiles = Math.min(6, loaded.selected.length);
+  check(tiles.tiles === expectedTiles, 'one tile for each selected series, six at most',
+    `${tiles.tiles} for ${loaded.selected.length} selected`);
+  for (const sid of loaded.selected.slice(0, 6)) {
     const latest = latestOf(sid);
     const model = tiles.models.find((t) => t.id === `${sid}__latest`);
-    const yoyModel = tiles.models.find((t) => t.id === `${sid}__yoy`);
-    check(!!model && near(model.value, latest.v, 1e-9), `the ${sid} latest tile matches the saved data`,
+    check(!!model && near(model.value, latest.v, 1e-9), `the ${sid} tile matches the saved data`,
       `tile ${model && model.value}, expected ${latest.v}`);
-    const yoy = yoyOf(sid);
-    check(!!yoyModel && (yoy === null ? yoyModel.value === null : near(yoyModel.value, yoy, 1e-9)),
-      `the ${sid} year-on-year tile matches the saved data`, `tile ${yoyModel && yoyModel.value}, expected ${yoy}`);
   }
+  check(tiles.caption.includes('first six selected series'), 'the tiles say what they are showing', tiles.caption);
   const clipped = tiles.painted.filter((p) => p.clipped);
   check(clipped.length === 0, 'no tile figure is cut short by an ellipsis', clipped.map((p) => p.text).join(', '));
   const white = tiles.painted.filter((p) => p.bg === 'rgb(255, 255, 255)').length;
@@ -486,33 +494,39 @@ try {
         formatted: model && model.formatted,
         delta: model ? model.delta : undefined,
         deltaPercent: model ? model.deltaPercent : undefined,
+        deltaFormatted: model ? model.deltaFormatted : undefined,
         text: fig ? fig.textContent : null,
       };
     };
-    return { yoy: tile('UNRATE__yoy'), latest: tile('UNRATE__latest') };
+    return { rate: tile('UNRATE__latest'), level: tile('CPIAUCSL__latest') };
   })()`);
-  console.log(`  UNRATE tiles: "${rateRule.yoy.label}" = ${rateRule.yoy.formatted}; latest tile text "${rateRule.latest.text}"`);
   const unrateLatest = latestOf('UNRATE');
   const unrateAgo = valueAt('UNRATE', yearBefore(unrateLatest.d));
-  check(/percentage points/i.test(rateRule.yoy.label || ''),
-    'the UNRATE year-on-year tile is labelled in percentage points', rateRule.yoy.label);
-  check(near(rateRule.yoy.value, unrateLatest.v - unrateAgo, 1e-9),
-    'the UNRATE year-on-year tile holds the change in points, not a percentage of the rate',
-    `tile ${rateRule.yoy.value}, expected ${unrateLatest.v - unrateAgo} points (a percentage would be ${((unrateLatest.v - unrateAgo) / unrateAgo) * 100})`);
-  check(!/%/.test(rateRule.yoy.text || ''), 'the UNRATE year-on-year tile shows no % anywhere', rateRule.yoy.text);
-  check(rateRule.latest.delta === null && !/%/.test(rateRule.latest.text || ''),
-    "the UNRATE latest tile draws no relative movement line, so no percentage of a rate is shown",
-    `delta ${rateRule.latest.delta}, text "${rateRule.latest.text}"`);
+  const unratePoints = unrateLatest.v - unrateAgo;
+  console.log(`  UNRATE tile label: ${JSON.stringify(rateRule.rate.label)}; text "${rateRule.rate.text}"`);
+  console.log(`  CPIAUCSL tile: delta ${rateRule.level.delta}, deltaPercent ${rateRule.level.deltaPercent}`);
+  check(/percentage points|\bpp\b/i.test(rateRule.rate.label || ''),
+    'the UNRATE tile states its year-on-year movement in percentage points', rateRule.rate.label);
+  check((rateRule.rate.label || '').includes(`${unratePoints > 0 ? '+' : ''}${unratePoints.toFixed(2)} pp`),
+    'and that is the change in points, not a percentage of the rate',
+    `label ${JSON.stringify(rateRule.rate.label)}, expected ${unratePoints.toFixed(2)} pp `
+      + `(a percentage would be ${((unratePoints) / unrateAgo) * 100})`);
+  check(!/%/.test(rateRule.rate.text || ''), 'the UNRATE tile shows no % anywhere', rateRule.rate.text);
+  check(rateRule.rate.delta === null,
+    'the UNRATE tile draws no relative movement line, so no percentage of a rate is shown',
+    `delta ${rateRule.rate.delta}`);
 
-  /* And a level series keeps its percentage, so the rule is a rule and not a
-     blanket removal. */
-  const levelTile = await evaluate(`(() => {
-    const t = window.__fredDemo.kpi.tile('CPIAUCSL__yoy');
-    return { label: t && t.label, value: t && t.value };
-  })()`);
-  check(/per cent/i.test(levelTile.label || ''), 'a level series still reports its year-on-year as a percentage', levelTile.label);
-  check(near(levelTile.value, yoyOf('CPIAUCSL'), 1e-9), 'and that percentage matches the saved data',
-    `${levelTile.value} vs ${yoyOf('CPIAUCSL')}`);
+  /* And a level series keeps the panel's own movement line, so the rule is a
+     rule and not a blanket removal. */
+  const cpiLatest = latestOf('CPIAUCSL');
+  const cpiAgo = valueAt('CPIAUCSL', yearBefore(cpiLatest.d));
+  check(near(rateRule.level.delta, cpiLatest.v - cpiAgo, 1e-9),
+    'a level series keeps its movement line, against the reading a year earlier',
+    `delta ${rateRule.level.delta}, expected ${cpiLatest.v - cpiAgo}`);
+  check(near(rateRule.level.deltaPercent * 100, ((cpiLatest.v - cpiAgo) / cpiAgo) * 100, 1e-9),
+    'and its percentage is the percentage of a level, which is the right reading',
+    `${rateRule.level.deltaPercent * 100}%`);
+  check(!/pp\b/.test(rateRule.level.label || ''), 'a level series is not given a points line', rateRule.level.label);
 
   /* The catalogue's two year-on-year columns: one unit each, never both. */
   const catalogueUnits = await evaluate(`(() => {
@@ -680,7 +694,8 @@ try {
   })()`);
   console.log(`  ticking ${extra.id}: tiles ${before.tiles} -> ${after.tiles}, chart rows ${before.chartRows} -> ${after.chartRows}, `
     + `chart series ${before.chartSeries} -> ${after.chartSeries}, observation columns ${before.columns.length} -> ${after.columns.length}`);
-  check(after.tiles === before.tiles + 2, 'ticking a series adds its two tiles', `${before.tiles} -> ${after.tiles}`);
+  check(after.tiles === Math.min(6, after.selected.length), 'ticking a series adds its tile, up to the cap of six',
+    `${before.tiles} -> ${after.tiles} for ${after.selected.length} selected`);
   check(after.tileRows > before.tileRows, "ticking a series routes its readings to the tiles' grid", `${before.tileRows} -> ${after.tileRows}`);
   check(after.chartRows > before.chartRows, 'ticking a series routes its readings to the chart', `${before.chartRows} -> ${after.chartRows}`);
   check(after.chartSeries === before.chartSeries + 1, 'ticking a series draws one more line', `${before.chartSeries} -> ${after.chartSeries}`);
@@ -723,6 +738,124 @@ try {
     check(near(cell, latest.v, 1e-9), `the observations table holds ${sid}'s newest reading on its own date`,
       `${cell}, expected ${latest.v} on ${latest.d}`);
   }
+
+  /* ---- the readings table scrolls its own rows ---- */
+
+  await evaluate("window.__fredDemo.tabs.activate('observations')");
+  await sleep(900);
+  const scroll = await evaluate(`(async () => {
+    const pane = document.querySelector('.observations-tab .grid-pane');
+    const root = pane && pane.querySelector('.lattice');
+    const body = root && root.querySelector('.lat-body-viewport');
+    const panel = document.querySelector('.tabs-host .lat-tabs__panel:not([hidden])');
+    if (!body) return { found: false };
+    const before = { top: body.scrollTop, panel: panel ? panel.scrollTop : 0, page: window.scrollY };
+    body.scrollTop = 800;
+    await new Promise((r) => setTimeout(r, 400));
+    const after = { top: body.scrollTop, panel: panel ? panel.scrollTop : 0, page: window.scrollY };
+    const firstVisible = body.querySelector('.lat-row[data-index]');
+    body.scrollTop = 0;
+    await new Promise((r) => setTimeout(r, 300));
+    return {
+      found: true,
+      scrollHeight: body.scrollHeight,
+      clientHeight: body.clientHeight,
+      paneHeight: Math.round(pane.getBoundingClientRect().height),
+      panelScrollHeight: panel ? panel.scrollHeight : 0,
+      panelClientHeight: panel ? panel.clientHeight : 0,
+      before,
+      after,
+      rowAt800: firstVisible ? firstVisible.getAttribute('data-index') : null,
+      caption: (document.querySelector('.observations-tab .panel-caption') || {}).textContent || '',
+    };
+  })()`);
+  console.log(`  readings table: pane ${scroll.paneHeight}px, body ${scroll.clientHeight}px of ${scroll.scrollHeight}px scrollable; `
+    + `scrollTop ${scroll.before.top} -> ${scroll.after.top}, first row at that point ${scroll.rowAt800}`);
+  console.log(`  its panel: ${scroll.panelClientHeight}px of ${scroll.panelScrollHeight}px`);
+  check(scroll.found, 'the readings table is on the readings tab');
+  check(scroll.paneHeight > 380 && scroll.paneHeight < 470, 'the readings table has a stated height of its own',
+    `${scroll.paneHeight}px`);
+  check(scroll.scrollHeight > scroll.clientHeight, 'the readings table has more rows than it can show at once',
+    `${scroll.scrollHeight} > ${scroll.clientHeight}`);
+  check(scroll.after.top > 0, 'scrolling the readings table moves its own rows',
+    `scrollTop ${scroll.before.top} -> ${scroll.after.top}`);
+  check(Number(scroll.rowAt800) > 0, 'and the rows underneath are reachable', `first drawn row index ${scroll.rowAt800}`);
+  check(scroll.after.panel === scroll.before.panel && scroll.after.page === scroll.before.page,
+    'the tab panel and the page itself stay put while it scrolls',
+    `panel ${scroll.before.panel} -> ${scroll.after.panel}, page ${scroll.before.page} -> ${scroll.after.page}`);
+  check(scroll.panelScrollHeight <= scroll.panelClientHeight + 1,
+    'the tab panel is not scrolling the whole table instead',
+    `${scroll.panelScrollHeight} vs ${scroll.panelClientHeight}`);
+  check(/blank cell/i.test(scroll.caption), 'the readings table says what a blank cell means', scroll.caption);
+
+  /* ---- the headings are the series' names, with FRED's id beneath ---- */
+
+  const headings = await evaluate(`(() => {
+    const root = document.querySelector('.observations-tab .grid-pane .lattice');
+    const cells = [...root.querySelectorAll('[role="columnheader"]')];
+    return cells.map((c) => ({
+      title: (c.querySelector('.obs-head-title') || {}).textContent || null,
+      id: (c.querySelector('.obs-head-id') || {}).textContent || null,
+      text: c.textContent.trim().slice(0, 40),
+    }));
+  })()`);
+  const named = headings.filter((h) => h.title);
+  console.log(`  headings: ${headings.map((h) => h.text).join(' | ')}`);
+  check(named.length === loaded.selected.length, 'every series column is headed by the series name',
+    `${named.length} named of ${headings.length} headings`);
+  for (const sid of loaded.selected) {
+    const row = catalogue.find((r) => r.id === sid);
+    const head = named.find((h) => h.id === sid);
+    check(!!head && head.title === row.title, `the ${sid} column is headed "${row.title}" with its FRED id beneath`,
+      head ? `${head.title} / ${head.id}` : 'not found');
+  }
+
+  /* ---- ticking a checkbox selects a row and nothing else ---- */
+
+  const clicking = await evaluate(`(async () => {
+    const root = document.querySelector('.primary-host .lattice');
+    const box = root.querySelector('.lat-body-viewport input[type="checkbox"]');
+    const before = window.__fredDemo.catalogueGrid.selection.keys().length;
+    if (box) box.click();
+    await new Promise((r) => setTimeout(r, 500));
+    const cell = root.querySelector('.lat-body-viewport [role="gridcell"]:not(:first-child)');
+    if (cell) cell.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    if (cell) cell.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    await new Promise((r) => setTimeout(r, 500));
+    return {
+      before,
+      afterBox: window.__fredDemo.catalogueGrid.selection.keys().length,
+      ranges: window.__fredDemo.catalogueGrid.selection.ranges().length,
+      fillHandles: document.querySelectorAll('.lat-fill-handle').length,
+      rangeCells: document.querySelectorAll('.lat-cell--range').length,
+    };
+  })()`);
+  console.log(`  after a checkbox click and a cell click: selection ${clicking.before} -> ${clicking.afterBox}, `
+    + `ranges ${clicking.ranges}, fill handles ${clicking.fillHandles}, range cells ${clicking.rangeCells}`);
+  check(clicking.afterBox !== clicking.before, 'the checkbox selects the row', `${clicking.before} -> ${clicking.afterBox}`);
+  check(clicking.ranges === 0, 'clicking a cell starts no cell range', `${clicking.ranges}`);
+  check(clicking.fillHandles === 0, 'there is no fill handle to grab', `${clicking.fillHandles}`);
+  check(clicking.rangeCells === 0, 'no cell is drawn as selected', `${clicking.rangeCells}`);
+
+  /* And no heading offers to be dragged, or to open a menu. */
+  const headerFurniture = await evaluate(`(() => ({
+    menus: document.querySelectorAll('.lat-header-menu').length,
+    filters: document.querySelectorAll('.lat-header-filter').length,
+    sorts: document.querySelectorAll('.lat-header-sort').length,
+    movable: document.querySelectorAll('[data-movable="true"]').length,
+    reorderTips: [...document.querySelectorAll('[title]')].filter((e) => /to reorder/i.test(e.getAttribute('title') || '')).length,
+  }))()`);
+  console.log(`  header furniture: ${JSON.stringify(headerFurniture)}`);
+  check(headerFurniture.menus === 0, 'no heading carries a column menu', `${headerFurniture.menus}`);
+  check(headerFurniture.filters === 0, 'no heading carries a filter funnel', `${headerFurniture.filters}`);
+  check(headerFurniture.reorderTips === 0, 'no heading offers to be dragged to reorder', `${headerFurniture.reorderTips}`);
+  check(headerFurniture.movable === 0, 'and none is marked as draggable', `${headerFurniture.movable}`);
+  check(headerFurniture.sorts > 0, 'the sort control is still there, which is the one worth keeping',
+    `${headerFurniture.sorts}`);
+
+  /* Put the selection back before the rest of the checks read it. */
+  await evaluate(`window.__fredDemo.catalogueGrid.selection.set(${JSON.stringify(meta.defaultSelection.map((x) => `S:${x}`))})`);
+  await sleep(700);
 
   noErrors('the dashboard');
 
@@ -770,22 +903,76 @@ try {
   check(vintage.buffered > 0, "the router's time-travel buffer holds the revision history", `${vintage.buffered} deltas`);
   check(vintage.travelling, 'the view opens rewound to a past vintage rather than at today', `at ${vintage.vintage}`);
 
-  /* The opening vintage is the first print of the 2020 collapse, and the
-     numbers on screen are the numbers ALFRED holds for that day. */
-  const opening = vintages.find((v) => v.series === vintage.series_ && v.vintageDate === vintage.vintage);
-  check(!!opening, 'the opening vintage is one the snapshot saved', `${vintage.series_} @ ${vintage.vintage}`);
-  const openingLast = opening.observations[opening.observations.length - 1];
-  const shown = await evaluate(`window.__fredDemo.vintages.asPublishedGrid.rows.value(${JSON.stringify(`${openingLast.d}|then`)}, 'v')`);
-  check(near(shown, openingLast.v, 1e-9), 'the newest reading shown is the one that vintage published',
-    `${shown}, expected ${openingLast.v} for ${openingLast.d}`);
+  /*
+   * The opening vintage, recomputed here: the day the series' biggest revision
+   * was FIRST published. The page works it out from the same data, so this is
+   * the rule checked rather than a date written down in two places -- which
+   * matters, because a keyless snapshot and a keyed one share almost no vintage
+   * dates and a fixed date would be right in only one of them.
+   */
+  const biggestRevisionOf = (series) => {
+    const mine = vintages.filter((v) => v.series === series);
+    if (!mine.length) return null;
+    const newest = new Map(mine[mine.length - 1].observations.map((o) => [o.d, o.v]));
+    const first = new Map();
+    const firstVintage = new Map();
+    for (const record of mine) {
+      for (const o of record.observations) {
+        if (!first.has(o.d)) { first.set(o.d, o.v); firstVintage.set(o.d, record.vintageDate); }
+      }
+    }
+    let best = null;
+    for (const [d, latest] of newest) {
+      if (!first.has(d)) continue;
+      const revision = latest - first.get(d);
+      if (!best || Math.abs(revision) > Math.abs(best.revision)) {
+        best = { d, revision, first: first.get(d), latest, vintage: firstVintage.get(d) };
+      }
+    }
+    return best;
+  };
 
-  const latestVintage = vintages.filter((v) => v.series === vintage.series_).pop();
-  const nowValue = latestVintage.observations.find((o) => o.d === openingLast.d);
-  check(nowValue && Math.abs(nowValue.v - openingLast.v) > 0,
+  const expectedOpening = biggestRevisionOf(vintage.series_);
+  console.log(`  biggest revision in ${vintage.series_}: ${expectedOpening.d} first published ${expectedOpening.first} `
+    + `on ${expectedOpening.vintage}, now ${expectedOpening.latest} (${expectedOpening.revision.toFixed(2)})`);
+  check(vintage.vintage === expectedOpening.vintage,
+    "the view opens on the day the series' biggest revision was first published",
+    `${vintage.vintage}, expected ${expectedOpening.vintage}`);
+  check(!!vintages.find((v) => v.series === vintage.series_ && v.vintageDate === vintage.vintage),
+    'the opening vintage is one the snapshot saved', `${vintage.series_} @ ${vintage.vintage}`);
+
+  const shown = await evaluate(`(() => {
+    const g = window.__fredDemo.vintages.asPublishedGrid;
+    return {
+      then: g.rows.value(${JSON.stringify(`${expectedOpening.d}|then`)}, 'v'),
+      now: g.rows.value(${JSON.stringify(`${expectedOpening.d}|now`)}, 'v'),
+    };
+  })()`);
+  check(near(shown.then, expectedOpening.first, 1e-9),
+    'the reading on screen for that observation is the number that vintage published',
+    `${shown.then}, expected ${expectedOpening.first} for ${expectedOpening.d}`);
+  check(near(shown.now, expectedOpening.latest, 1e-9),
+    'and the line beside it is the number as it stands today',
+    `${shown.now}, expected ${expectedOpening.latest}`);
+  check(Math.abs(expectedOpening.revision) > 0,
     'that reading has actually been revised since, so the two lines differ',
-    `first ${openingLast.v}, now ${nowValue && nowValue.v}`);
-  check(vintage.stat != null && Math.abs(vintage.stat) > 0, 'the largest-revision tile reports a revision',
-    `${vintage.statText}`);
+    `first ${expectedOpening.first}, now ${expectedOpening.latest}`);
+  check(vintage.stat != null && near(Math.abs(vintage.stat), Math.abs(expectedOpening.revision), 1e-9),
+    'the largest-revision tile reports exactly that revision',
+    `tile ${vintage.statText}, expected ${expectedOpening.revision}`);
+
+  /* Every vintage the snapshot holds is reachable on the slider. */
+  const slider = await evaluate(`(() => {
+    const el = document.querySelector('.vintage-slider');
+    return { min: Number(el.min), max: Number(el.max), value: Number(el.value), dates: window.__fredDemo.vintages.dates.length };
+  })()`);
+  console.log(`  slider: ${slider.dates} vintage dates, position ${slider.value} of ${slider.max}`);
+  check(slider.dates === (meta.counts.vintageDates[vintage.series_] !== undefined
+    ? vintages.filter((v) => v.series === vintage.series_).length
+    : slider.dates),
+    'the slider offers every vintage the snapshot saved for the series', `${slider.dates}`);
+  check(slider.max === slider.dates - 1 && slider.min === 0,
+    'the slider spans exactly those vintages', `${slider.min}..${slider.max} for ${slider.dates}`);
 
   /* A rate series' revisions are in points and carry no percentage column. */
   const rateRevisions = await evaluate(`(async () => {

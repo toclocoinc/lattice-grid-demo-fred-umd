@@ -40,9 +40,8 @@
     });
   }
 
-  /** The vintage the view opens on: the first print of the 2020 collapse. */
+  /** The series the view opens on. */
   const OPENING_SERIES = 'A191RL1Q225SBEA';
-  const OPENING_VINTAGE = '2020-08-01';
 
   /**
    * The columns of the revisions table.
@@ -58,8 +57,8 @@
         title: 'Reading for',
         type: 'date',
         format: { type: 'date', pattern: 'MMM yyyy' },
-        filter: { type: 'date' },
-        layout: { width: 130, pin: 'start' },
+        filter: { type: 'date', enabled: false },
+        layout: { width: 130, pin: 'start', movable: false },
       },
       {
         id: 'first',
@@ -67,7 +66,7 @@
         title: `First published (${units})`,
         type: 'number',
         format: { type: 'number', decimals: 2 },
-        layout: { width: 200 },
+        layout: { width: 200, movable: false },
       },
       {
         id: 'firstVintage',
@@ -75,7 +74,7 @@
         title: 'First published on',
         type: 'date',
         format: { type: 'date', pattern: 'd MMM yyyy' },
-        layout: { width: 160 },
+        layout: { width: 160, movable: false },
       },
       {
         id: 'latest',
@@ -83,7 +82,7 @@
         title: `As it stands now (${units})`,
         type: 'number',
         format: { type: 'number', decimals: 2 },
-        layout: { width: 200 },
+        layout: { width: 200, movable: false },
       },
       {
         id: 'revision',
@@ -95,7 +94,7 @@
         format: rate
           ? { type: 'number', decimals: 2, suffix: ' pp', signed: true }
           : { type: 'number', decimals: 2, signed: true },
-        layout: { width: rate ? 200 : 140 },
+        layout: { width: rate ? 200 : 140, movable: false },
       },
     ];
     /* No percentage column at all for a rate series: a revision of 0.30 points
@@ -109,10 +108,32 @@
         type: 'number',
         format: { type: 'number', decimals: 1, suffix: '%', signed: true },
         cell: { decoration: { type: 'bar', min: -20, max: 20, origin: 0 } },
-        layout: { width: 160 },
+        layout: { width: 160, movable: false },
       });
     }
     return columns;
+  }
+
+  /**
+   * Which vintage to open on: the one that first published the biggest revision.
+   *
+   * A vintage list is only interesting where the numbers moved, and the number
+   * that moved most is the one worth showing being announced. Falls back to the
+   * newest vintage when nothing has been revised at all.
+   *
+   * @param {{revision: number|null, firstVintage: string}[]} revisions the
+   *   revision rows for the series
+   * @param {string[]} dates the vintage dates, oldest first
+   * @returns {number} the index into `dates`
+   */
+  function openingIndex(revisions, dates) {
+    let biggest = null;
+    for (const row of revisions) {
+      if (row.revision == null || !Number.isFinite(row.revision)) continue;
+      if (!biggest || Math.abs(row.revision) > Math.abs(biggest.revision)) biggest = row;
+    }
+    const at = biggest ? dates.indexOf(biggest.firstVintage) : -1;
+    return at >= 0 ? at : dates.length - 1;
   }
 
   /**
@@ -204,6 +225,7 @@
       rowKey: 'id',
       theme: 'light',
       density: 'compact',
+      selection: 'none',
       columns: [
         { id: 'd', field: 'd', title: 'Reading for', type: 'date' },
         { id: 'which', field: 'which', title: 'Vintage' },
@@ -218,7 +240,10 @@
       theme: 'light',
       density: 'compact',
       stripedRows: true,
-      columnMenu: true,
+      /* Nothing here selects, drags or filters from a heading: the same rule the
+         rest of the page follows. */
+      selection: 'none',
+      columnMenu: false,
       statusBar: true,
       find: true,
       title: 'Every reading, as first published and as it stands now',
@@ -319,11 +344,20 @@
         if (deltas.length) router.apply(deltas);
       }
 
-      revisionsGrid.rows.load(root.FredDemo.revisionsFor(index, sid, rate));
+      const revisions = root.FredDemo.revisionsFor(index, sid, rate);
+      revisionsGrid.rows.load(revisions);
 
-      const opening = sid === OPENING_SERIES && dates.includes(OPENING_VINTAGE)
-        ? dates.indexOf(OPENING_VINTAGE)
-        : dates.length - 1;
+      /*
+       * Open on the day the biggest revision in the series was FIRST PUBLISHED,
+       * read out of the data rather than written down here. That is the moment
+       * worth arriving at -- for real GDP growth it is the advance estimate of
+       * the second quarter of 2020, announced as a fall of 32.9% and now read
+       * as 28% -- and it lands on the right day whichever way the snapshot was
+       * built. A fixed date could not: the keyless build asks ALFRED on a list
+       * of days chosen here, while a keyed build uses the days FRED actually
+       * revised the series on, and the two lists share almost no dates.
+       */
+      const opening = openingIndex(revisions, dates);
       slider.max = String(dates.length - 1);
       slider.value = String(opening);
       scrubTo(opening);
