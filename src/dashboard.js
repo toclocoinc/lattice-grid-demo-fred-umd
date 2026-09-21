@@ -1,0 +1,873 @@
+/**
+ * The dashboard: a catalogue of US economic series, and every view built from
+ * whichever of them you pick.
+ *
+ * The shape of it is one stream and one Data Router. The saved copy is loaded
+ * once, as a single array holding both the catalogue rows and every reading,
+ * and the router partitions it:
+ *
+ *   'series' -> the catalogue grid, the table you choose from
+ *   'obs'    -> the chart's grid (long form, one row per reading)
+ *   'obs'    -> the observations grid, as a rollup by date, one column per series
+ *   'obs'    -> a plain subscriber, which keeps the line under the chart honest
+ *
+ * Choosing rows in the catalogue does not reload anything. `router.link` makes
+ * the catalogue's selection a filter on what the other three routes receive, so
+ * the chart, the tiles and the observations table are re-pushed through the
+ * same keyed diff and keep their scroll and their sort.
+ *
+ * Nothing here reaches for a global: every factory is handed in, so this file
+ * would read the same if the library had arrived as an import.
+ *
+ * A classic script: it reads `FredDemo`, put there by `fred-data.js`, and adds
+ * `buildDashboard` alongside it.
+ */
+(function (root) {
+  'use strict';
+
+  const { prepare } = root.FredDemo;
+
+  /** The transformations the chart offers. */
+  const MODES = [
+    { id: 'level', label: 'Level', field: 'v' },
+    { id: 'pct', label: '% change on the period before', field: 'pct' },
+    { id: 'yoy', label: '% change on a year earlier', field: 'yoy' },
+    { id: 'index', label: 'Index, 100 at', field: 'idx' },
+  ];
+
+  const FRED_SERIES_URL = 'https://fred.stlouisfed.org/series/';
+
+  /** Make an element with a class and optional text, the long way round. */
+  function el(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text != null) node.textContent = text;
+    return node;
+  }
+
+  /** A number with a sensible number of digits for its magnitude. */
+  function readable(value) {
+    if (value == null || !Number.isFinite(value)) return '—';
+    const size = Math.abs(value);
+    const digits = size >= 1000 ? 0 : size >= 100 ? 1 : size >= 1 ? 2 : 3;
+    return new Intl.NumberFormat('en-GB', { maximumFractionDigits: digits, minimumFractionDigits: digits }).format(value);
+  }
+
+  /** A date, written out. */
+  function longDate(date) {
+    if (!date) return '—';
+    return new Date(`${date}T00:00:00Z`).toLocaleDateString('en-GB', {
+      day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC',
+    });
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Columns                                                             */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * The catalogue's columns: one row per series, and the three numbers that
+   * say where it stands.
+   *
+   * Every format is a FormatSpec object rather than a function, which is the
+   * only shape a column format takes.
+   *
+   * @returns {object[]} the column definitions
+   */
+  function catalogueColumns() {
+    return [
+      {
+        id: 'title',
+        field: 'title',
+        title: 'Series',
+        cell: { render: 'twoline', props: { secondary: 'units' } },
+        filter: { type: 'text' },
+        layout: { width: 300, pin: 'start' },
+      },
+      {
+        id: 'sid',
+        field: 'sid',
+        title: 'FRED id',
+        cell: {
+          render: 'link',
+          props: { href: `${FRED_SERIES_URL}{{value}}`, target: '_blank' },
+        },
+        filter: { type: 'text' },
+        layout: { width: 150 },
+      },
+      { id: 'category', field: 'category', title: 'Category', filter: { type: 'set' }, layout: { width: 170 } },
+      { id: 'units', field: 'units', title: 'Units', filter: { type: 'set' }, layout: { width: 210 } },
+      { id: 'frequency', field: 'frequency', title: 'Frequency', filter: { type: 'set' }, layout: { width: 110 } },
+      { id: 'seasonal', field: 'seasonal', title: 'Seasonal adjustment', filter: { type: 'set' }, layout: { width: 220 } },
+      {
+        id: 'latestDate',
+        field: 'latestDate',
+        title: 'Latest reading',
+        type: 'date',
+        format: { type: 'date', pattern: 'MMM yyyy' },
+        filter: { type: 'date' },
+        layout: { width: 130 },
+      },
+      {
+        id: 'latestValue',
+        field: 'latestValue',
+        title: 'Latest value',
+        type: 'number',
+        format: { type: 'number', decimals: 2 },
+        layout: { width: 140 },
+      },
+      {
+        id: 'change',
+        field: 'change',
+        title: 'Change on the period before',
+        type: 'number',
+        format: { type: 'number', decimals: 2, signed: true },
+        layout: { width: 190 },
+      },
+      {
+        id: 'yoy',
+        field: 'yoy',
+        title: 'Change on a year earlier',
+        type: 'number',
+        format: { type: 'number', decimals: 1, suffix: '%', signed: true },
+        cell: { decoration: { type: 'bar', min: -40, max: 40, origin: 0 } },
+        layout: { width: 190 },
+      },
+      { id: 'source', field: 'source', title: 'Published by', filter: { type: 'set' }, layout: { width: 280 } },
+      {
+        id: 'readings',
+        field: 'readings',
+        title: 'Readings held',
+        type: 'number',
+        format: { type: 'number', decimals: 0 },
+        layout: { width: 130, hidden: true },
+      },
+    ];
+  }
+
+  /**
+   * The observations grid's columns: a date, then one per catalogue series.
+   *
+   * Every series has a column from the start and all but the selected ones are
+   * hidden, because the columns are what the router's rollup writes and that
+   * roll-up is declared once. Choosing a different set of series changes which
+   * columns are shown, not what the grid is.
+   *
+   * @param {object[]} catalogue the catalogue rows
+   * @returns {object[]} the column definitions
+   */
+  function observationColumns(catalogue) {
+    const columns = [
+      {
+        id: 'd',
+        field: 'd',
+        title: 'Date',
+        type: 'date',
+        format: { type: 'date', pattern: 'MMM yyyy' },
+        filter: { type: 'date' },
+        layout: { width: 130, pin: 'start' },
+      },
+    ];
+    for (const row of catalogue) {
+      columns.push({
+        id: row.sid,
+        field: row.sid,
+        title: row.sid,
+        headerTooltip: `${row.title} (${row.units})`,
+        type: 'number',
+        format: { type: 'number', decimals: 2 },
+        layout: { width: 130, hidden: true },
+      });
+    }
+    return columns;
+  }
+
+  /** The shared grid settings. The right-hand tool rail is off on every one. */
+  function baseGridConfig(title, extra) {
+    return Object.assign(
+      {
+        rowKey: 'id',
+        theme: 'light',
+        density: 'compact',
+        stripedRows: true,
+        columnMenu: true,
+        statusBar: true,
+        find: true,
+        title,
+      },
+      extra || {},
+    );
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* The dashboard                                                       */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * Build the whole page into `host`.
+   *
+   * @param {object} options everything the page needs, all handed in
+   * @param {HTMLElement} options.root where the dashboard is drawn
+   * @param {Function} options.createGrid the grid factory
+   * @param {Function} options.createStat the statistic-tile factory
+   * @param {Function} options.createChart the charts module's factory
+   * @param {Function} options.createKPI the KPI module's factory
+   * @param {Function} options.createTabs the tabs module's factory
+   * @param {Function} options.createDataRouter the data router's factory
+   * @param {object} options.snapshot the saved copy, as read from disk
+   * @returns {object} the pieces that were built, for a caller that wants them
+   */
+  function buildDashboard(options) {
+    const {
+      root: host, createGrid, createStat, createChart, createKPI, createTabs, createDataRouter, snapshot,
+    } = options;
+    const meta = snapshot.meta;
+
+    host.textContent = '';
+
+    const data = prepare(snapshot);
+    const built = {
+      data,
+      meta,
+      catalogueGrid: null,
+      chartGrid: null,
+      observationsGrid: null,
+      kpi: null,
+      chart: null,
+      router: null,
+      tabs: null,
+      vintages: null,
+      mode: 'level',
+      unit: null,
+      indexBase: '2019-12',
+      routedCounts: { obs: 0 },
+    };
+
+    /* ---------------- the masthead ---------------- */
+
+    const header = el('header', 'head');
+    const heading = el('div', 'head-text');
+    heading.append(el('h1', null, 'The US economy, as it was published'));
+    heading.append(
+      el(
+        'p',
+        'lede',
+        `${meta.counts.series} headline series from FRED — output, prices, jobs, rates, housing, trade and ` +
+          'the federal balance sheet — with the numbers as they were first announced set beside the numbers ' +
+          'as they stand today. Built with Lattice Grid loaded by script tag: no install, no build step.',
+      ),
+    );
+    header.append(heading);
+
+    const provenance = el('div', 'head-note');
+    provenance.append(el('span', 'pill', 'Saved copy'));
+    const freshness = el(
+      'span',
+      'freshness',
+      `FRED does not allow browser requests, so this page shows a saved copy refreshed nightly. ` +
+        `Taken ${new Date(meta.builtAt).toLocaleString('en-GB')}.`,
+    );
+    provenance.append(freshness);
+    header.append(provenance);
+    host.append(header);
+
+    /* ---------------- the grids ---------------- */
+
+    const cataloguePane = el('div', 'grid-pane');
+    const catalogueGrid = createGrid(cataloguePane, baseGridConfig('Series in this dashboard', {
+      columns: catalogueColumns(),
+      selection: { mode: 'multiple', checkbox: true, headerCheckbox: true },
+      sort: [{ col: 'category', dir: 'asc' }, { col: 'title', dir: 'asc' }],
+    }));
+    built.catalogueGrid = catalogueGrid;
+
+    /* The chart's own grid: one row per reading of a selected series, carrying
+       every transformation as a column of its own, so switching between them
+       is a change of which column the chart plots rather than a reload. */
+    const chartGrid = createGrid(el('div', 'grid-pane'), baseGridConfig('Readings', {
+      columns: [
+        { id: 's', field: 's', title: 'Series' },
+        { id: 'd', field: 'd', title: 'Date', type: 'date' },
+        { id: 'v', field: 'v', title: 'Level', type: 'number' },
+        { id: 'pct', field: 'pct', title: 'Change %', type: 'number' },
+        { id: 'yoy', field: 'yoy', title: 'Year on year %', type: 'number' },
+        { id: 'idx', field: 'idx', title: 'Index', type: 'number' },
+        { id: 'change', field: 'change', title: 'Change', type: 'number' },
+      ],
+      statusBar: false,
+      find: false,
+    }));
+    built.chartGrid = chartGrid;
+
+    /* The tiles' own grid. It holds the same slice the chart's does, but the
+       chart narrows itself to one unit at a time and the tiles never should:
+       two viewers of one partition, which is what `overlap` is for. */
+    const tileGrid = createGrid(el('div', 'grid-pane hidden-grid'), baseGridConfig('Readings, for the tiles', {
+      columns: [
+        { id: 's', field: 's', title: 'Series' },
+        { id: 'd', field: 'd', title: 'Date', type: 'date' },
+        { id: 'v', field: 'v', title: 'Level', type: 'number' },
+        { id: 'yoy', field: 'yoy', title: 'Year on year %', type: 'number' },
+      ],
+      statusBar: false,
+      find: false,
+    }));
+    built.tileGrid = tileGrid;
+
+    const observationsPane = el('div', 'grid-pane');
+    const observationsGrid = createGrid(observationsPane, baseGridConfig('Every selected series, month by month', {
+      rowKey: 'd',
+      columns: observationColumns(data.catalogue),
+      sort: [{ col: 'd', dir: 'desc' }],
+    }));
+    built.observationsGrid = observationsGrid;
+
+    /* ---------------- the router ---------------- */
+
+    /*
+     * The index transformation needs a base reading per series, which changes
+     * when the reader picks a different base month. It is applied in the route's
+     * own transform, so the chart's grid carries an `idx` column beside the
+     * others and the chart never computes anything itself.
+     */
+    let indexBase = new Map();
+
+    /** Recompute the base reading of every series for the chosen month. */
+    function setIndexBase(month) {
+      built.indexBase = month;
+      indexBase = new Map();
+      for (const row of data.catalogue) {
+        /* The reading on or before the first of the chosen month: a quarterly
+           series has no reading in two months out of three. */
+        let best = null;
+        for (const reading of data.readings) {
+          if (reading.s !== row.sid) continue;
+          if (reading.d > `${month}-31`) break;
+          best = reading;
+        }
+        if (best && best.v !== 0) indexBase.set(row.sid, best.v);
+      }
+    }
+    setIndexBase(built.indexBase);
+
+    /** One reading, with its index value added. */
+    const withIndex = (row) => {
+      const base = indexBase.get(row.s);
+      return { ...row, idx: base === undefined ? null : (row.v / base) * 100 };
+    };
+
+    /*
+     * The observations grid is a rollup route: one summary row per date, and
+     * one aggregate per catalogue series that picks that series' reading out of
+     * the date's rows. Every series has an aggregate whether or not it is
+     * selected, because the link below means an unselected series' rows never
+     * reach the route at all -- its aggregate simply sees nothing and answers
+     * null, and its column is hidden.
+     */
+    const aggregates = {};
+    for (const row of data.catalogue) {
+      const sid = row.sid;
+      aggregates[sid] = (rows) => {
+        for (const reading of rows) if (reading.s === sid) return reading.v;
+        return null;
+      };
+    }
+
+    const router = createDataRouter({
+      key: 'kind',
+      rowKey: 'id',
+      /* Three routes and a subscriber all want the same partition: without
+         this, only the first of them would ever receive a row. */
+      overlap: true,
+      selectionDebounce: 0,
+    });
+    built.router = router;
+
+    router.attach(catalogueGrid, 'series', { label: 'catalogue' });
+    router.attach(chartGrid, 'obs', { label: 'chart', transform: withIndex });
+    router.attach(tileGrid, 'obs', { label: 'tiles' });
+    router.attach(observationsGrid, 'obs', {
+      label: 'observations',
+      rollup: { groupBy: 'd', aggregate: aggregates },
+      sort: { key: 'd', dir: 'desc' },
+    });
+
+    /* A fourth viewer of the same partition that is not a grid at all: it keeps
+       the count under the chart, off the same keyed diff the grids get. */
+    const readingLine = el('p', 'chart-note');
+    router.subscribe('obs', (change) => {
+      built.routedCounts.obs += (change.add ? change.add.length : 0) - (change.remove ? change.remove.length : 0);
+      describeSelection();
+    });
+
+    /* The catalogue's selection filters what the other routes receive. */
+    router.link(catalogueGrid, chartGrid, { from: 'sid', to: 's' });
+    router.link(catalogueGrid, tileGrid, { from: 'sid', to: 's' });
+    router.link(catalogueGrid, observationsGrid, { from: 'sid', to: 's' });
+
+    /* The catalogue first, so the default selection can be made before the
+       24,000 readings arrive and every route is narrow from its first paint. */
+    router.load(data.catalogue);
+    catalogueGrid.selection.set(meta.defaultSelection.map((sid) => `S:${sid}`));
+    router.load(data.stream);
+
+    /* ---------------- the tiles ---------------- */
+
+    const kpiStrip = el('section', 'kpi-strip');
+    kpiStrip.setAttribute('aria-label', 'The selected series, latest');
+    host.append(kpiStrip);
+
+    /** The rows of one series, newest last, out of the chart grid's view. */
+    function readingsOf(rows, sid) {
+      const mine = [];
+      for (const row of rows) if (row.s === sid) mine.push(row);
+      mine.sort((a, b) => (a.d < b.d ? -1 : 1));
+      return mine;
+    }
+
+    /**
+     * Rebuild the tile panel for the current selection.
+     *
+     * Two tiles a series: the latest reading, with the reading before it as the
+     * baseline so the panel draws the movement, and the change on a year
+     * earlier. A series with only one reading in view gets no baseline, so no
+     * arrow is drawn for a movement there is nothing to measure.
+     *
+     * @returns {void}
+     */
+    function rebuildTiles() {
+      if (built.kpi) built.kpi.destroy();
+      kpiStrip.textContent = '';
+      const chosen = selectedSeries();
+      if (!chosen.length) {
+        kpiStrip.append(el('p', 'empty-note', 'Choose one or more series in the table below.'));
+        built.kpi = null;
+        return;
+      }
+      const tiles = [];
+      for (const sid of chosen) {
+        const entry = data.byId.get(sid);
+        const mine = readingsOf(tileGrid.rows.data(), sid);
+        const latest = mine.length ? mine[mine.length - 1] : null;
+        const previous = mine.length > 1 ? mine[mine.length - 2] : null;
+        tiles.push({
+          id: `${sid}__latest`,
+          label: `${entry.title} — ${entry.units}`,
+          aggregation: 'custom',
+          format: { type: 'compact', decimals: 2 },
+          compute: (rows) => {
+            const list = readingsOf(rows, sid);
+            return list.length ? list[list.length - 1].v : null;
+          },
+          /* No baseline where there is no period before this one: an arrow
+             pointing at nothing is worse than no arrow. */
+          ...(previous ? { baseline: previous.v } : {}),
+        });
+        tiles.push({
+          id: `${sid}__yoy`,
+          label: `${entry.title} — on a year earlier, %`,
+          aggregation: 'custom',
+          format: { type: 'number', decimals: 1 },
+          compute: (rows) => {
+            const list = readingsOf(rows, sid);
+            return list.length ? list[list.length - 1].yoy : null;
+          },
+        });
+        void latest;
+      }
+      built.kpi = createKPI(kpiStrip, {
+        grid: tileGrid,
+        rowKey: 'id',
+        fields: ['s', 'd', 'v', 'yoy'],
+        columns: Math.min(4, tiles.length),
+        ariaLabel: 'The selected series, latest',
+        tiles,
+      });
+    }
+
+    /* ---------------- the chart ---------------- */
+
+    const chartSection = el('section', 'chart-section');
+    chartSection.setAttribute('aria-label', 'The selected series over time');
+
+    const toolbar = el('div', 'actions');
+    toolbar.append(el('span', 'actions-label', 'Show:'));
+    const modeButtons = new Map();
+    for (const mode of MODES) {
+      const button = el('button', 'action toggle', mode.label);
+      button.type = 'button';
+      button.setAttribute('aria-pressed', String(mode.id === built.mode));
+      button.classList.toggle('on', mode.id === built.mode);
+      button.addEventListener('click', () => setMode(mode.id));
+      toolbar.append(button);
+      modeButtons.set(mode.id, button);
+    }
+    const baseInput = el('input', 'action base-input');
+    baseInput.type = 'month';
+    baseInput.value = built.indexBase;
+    baseInput.setAttribute('aria-label', 'The month the index is 100 at');
+    baseInput.addEventListener('change', () => {
+      if (!baseInput.value) return;
+      setIndexBase(baseInput.value);
+      /* Re-running the whole snapshot through the router is a keyed diff, so
+         only the numbers that actually changed reach a grid. */
+      router.load(data.stream);
+      if (built.mode === 'index') drawChart();
+    });
+    toolbar.append(baseInput);
+
+    /*
+     * Which unit the level chart draws. One measure axis means one unit at a
+     * time; this is how a reader chooses which. It appears only when the
+     * selection actually spans more than one.
+     */
+    const unitLabel = el('span', 'actions-label', 'Unit:');
+    const unitPicker = el('select', 'action');
+    unitPicker.setAttribute('aria-label', 'Which unit the level chart draws');
+    unitPicker.addEventListener('change', () => {
+      built.unit = unitPicker.value;
+      drawChart();
+    });
+    toolbar.append(unitLabel, unitPicker);
+    chartSection.append(toolbar);
+
+    /**
+     * Fill the unit picker from the units the selection spans.
+     *
+     * @param {{group: string, ids: string[]}[]} groups the unit groups
+     * @returns {void}
+     */
+    function rebuildUnitPicker(groups) {
+      const show = built.mode === 'level' && groups.length > 1;
+      unitLabel.hidden = !show;
+      unitPicker.hidden = !show;
+      if (!show) return;
+      const wanted = groups.map((g) => `${g.group} (${g.ids.length})`).join('|');
+      if (unitPicker.dataset.of !== wanted) {
+        unitPicker.textContent = '';
+        for (const group of groups) {
+          const option = el('option', null, `${group.group} (${group.ids.length})`);
+          option.value = group.group;
+          unitPicker.append(option);
+        }
+        unitPicker.dataset.of = wanted;
+      }
+      unitPicker.value = built.unit;
+    }
+
+    const chartBox = el('div', 'chart-box tall');
+    chartSection.append(chartBox);
+    chartSection.append(readingLine);
+    host.append(chartSection);
+
+    /** The series ids selected in the catalogue, in catalogue order. */
+    function selectedSeries() {
+      const keys = new Set(catalogueGrid.selection.keys());
+      return data.catalogue.filter((row) => keys.has(row.id)).map((row) => row.sid);
+    }
+
+    /**
+     * The recession shading, as the chart's own annotation layer.
+     *
+     * Each NBER recession is a vertical band between two dates. The band's
+     * edges are clipped to the readings on the chart, because a band that
+     * starts before the first reading has no place on the axis to start at.
+     *
+     * @returns {object[]} the annotations
+     */
+    function recessionBands() {
+      const first = data.firstDate;
+      const last = data.lastDate;
+      const bands = [];
+      for (const span of data.recessions) {
+        if (span.to < first || span.from > last) continue;
+        bands.push({
+          kind: 'band',
+          orient: 'vertical',
+          from: new Date(`${span.from < first ? first : span.from}T00:00:00Z`),
+          to: new Date(`${span.to > last ? last : span.to}T00:00:00Z`),
+          colour: '#123a6b',
+          opacity: 0.08,
+          className: 'recession-band',
+        });
+      }
+      if (bands.length) bands[0].label = 'Recession';
+      return bands;
+    }
+
+    /**
+     * The decade marks the time axis is labelled at.
+     *
+     * Named rather than counted: `axis.x.ticks` takes either a count or the
+     * exact values, and for fifty-odd years of monthly readings the values a
+     * reader looks for are the decades, not five evenly spaced moments.
+     *
+     * @returns {number[]} the tick positions, in epoch milliseconds
+     */
+    function decadeTicks() {
+      const from = Number(data.firstDate.slice(0, 4));
+      const to = Number(data.lastDate.slice(0, 4));
+      const out = [];
+      for (let year = Math.ceil(from / 10) * 10; year <= to; year += 10) out.push(Date.UTC(year, 0, 1));
+      return out;
+    }
+
+    /**
+     * Group the selected series by the unit they are measured in.
+     *
+     * @param {string[]} chosen the selected series ids
+     * @returns {{group: string, ids: string[]}[]} the groups, largest first
+     */
+    function unitGroups(chosen) {
+      const groups = new Map();
+      for (const sid of chosen) {
+        const group = data.byId.get(sid).unitGroup;
+        if (!groups.has(group)) groups.set(group, []);
+        groups.get(group).push(sid);
+      }
+      return [...groups].map(([group, ids]) => ({ group, ids })).sort((a, b) => b.ids.length - a.ids.length);
+    }
+
+    /** What the chart is about to draw, in one sentence. */
+    function describeSelection() {
+      const chosen = selectedSeries();
+      if (!chosen.length) {
+        readingLine.textContent = 'Nothing is selected, so there is nothing to draw.';
+        return;
+      }
+      const mode = MODES.find((m) => m.id === built.mode);
+      const window = `${longDate(data.firstDate)} to ${longDate(data.lastDate)}`;
+      readingLine.textContent =
+        `${chosen.length} series selected; ${chartGrid.rows.count().toLocaleString('en-GB')} readings on the chart, ` +
+        `drawn as ${mode.label.toLowerCase()}${built.mode === 'index' ? ` ${built.indexBase}` : ''}. ` +
+        `${window}. Daily and weekly series are shown at their last reading of each month. ` +
+        'Shaded bands are NBER recessions.';
+    }
+
+    /**
+     * Draw, or redraw, the main chart for the current mode and selection.
+     *
+     * One measure axis, always. A level chart of series measured in different
+     * units therefore draws one unit at a time, chosen in the toolbar; the
+     * percentage and index transformations put every series into the same unit
+     * and draw them all together, which is the reason they are there.
+     *
+     * @returns {void}
+     */
+    function drawChart() {
+      if (built.chart) { built.chart.destroy(); built.chart = null; }
+      chartBox.textContent = '';
+      const chosen = selectedSeries();
+      if (!chosen.length) { describeSelection(); return; }
+
+      const mode = MODES.find((m) => m.id === built.mode);
+      const groups = unitGroups(chosen);
+
+      /* Level: only the series measured in the chosen unit are drawn, through a
+         named row predicate on the chart's own grid. The tiles and the
+         observations table are fed by their own routes and keep every series. */
+      if (built.mode === 'level' && groups.length > 1) {
+        if (!groups.some((g) => g.group === built.unit)) built.unit = groups[0].group;
+        const wanted = new Set(groups.find((g) => g.group === built.unit).ids);
+        chartGrid.filters.where('unit', (row) => wanted.has(row.s));
+      } else {
+        chartGrid.filters.where('unit', null);
+        built.unit = groups.length ? groups[0].group : null;
+      }
+      rebuildUnitPicker(groups);
+      describeSelection();
+
+      const notDrawn = built.mode === 'level'
+        ? groups.filter((g) => g.group !== built.unit).flatMap((g) => g.ids)
+        : [];
+
+      built.chart = createChart({
+        grid: chartGrid,
+        container: chartBox,
+        type: 'line',
+        x: 'd',
+        y: mode.field,
+        series: 's',
+        annotations: recessionBands(),
+        legend: { position: 'bottom', isolate: true },
+        scheme: 'colourblind',
+        tooltip: true,
+        title: built.mode === 'index' ? `Index, 100 at ${built.indexBase}` : mode.label,
+        axis: {
+          x: { title: '', ticks: decadeTicks() },
+          y: {
+            title: built.mode === 'level'
+              ? built.unit
+              : built.mode === 'index' ? 'Index' : 'Per cent',
+          },
+        },
+        footnote:
+          built.mode === 'level'
+            ? (notDrawn.length
+              ? `Showing the ${chosen.length - notDrawn.length} of ${chosen.length} selected series measured in `
+                + `${String(built.unit).toLowerCase()}. Not drawn here: `
+                + `${notDrawn.map((sid) => data.byId.get(sid).title).join(', ')} \u2014 a different unit needs a `
+                + 'different scale. Pick another unit above, or switch to an index or a percentage change.'
+              : `All ${String(built.unit).toLowerCase()}.`)
+            : built.mode === 'index'
+              ? `Each series set to 100 at ${built.indexBase}; a series with no reading by then is not drawn.`
+              : 'A percentage of each series\u2019 own value, so a rate\u2019s change is in per cent, not in points.',
+      });
+    }
+
+    /** Switch transformation. */
+    function setMode(id) {
+      built.mode = id;
+      for (const [key, button] of modeButtons) {
+        const on = key === id;
+        button.setAttribute('aria-pressed', String(on));
+        button.classList.toggle('on', on);
+      }
+      baseInput.hidden = id !== 'index';
+      drawChart();
+    }
+    built.setMode = setMode;
+
+    /* ---------------- the catalogue, and the tabs under it ---------------- */
+
+    const cataloguePanel = el('section', 'panel primary-host');
+    const catalogueBar = el('div', 'actions');
+    catalogueBar.append(
+      el('span', 'actions-label', 'Tick the series you want. Everything above and below follows the selection.'),
+    );
+    const groupButton = el('button', 'action toggle', 'Group by category');
+    groupButton.type = 'button';
+    groupButton.setAttribute('aria-pressed', 'false');
+    groupButton.addEventListener('click', () => {
+      const on = groupButton.getAttribute('aria-pressed') === 'true';
+      catalogueGrid.columns.group(on ? [] : ['category']);
+      groupButton.setAttribute('aria-pressed', String(!on));
+      groupButton.classList.toggle('on', !on);
+    });
+    catalogueBar.append(groupButton);
+    built.groupButton = groupButton;
+    cataloguePanel.append(catalogueBar);
+    cataloguePanel.append(cataloguePane);
+    host.append(cataloguePanel);
+
+    const tabsHost = el('section', 'tabs-host');
+    host.append(tabsHost);
+
+    const vintagePane = el('div', 'vintage-pane');
+    const tabs = createTabs(tabsHost, {
+      createGrid,
+      tabs: [
+        {
+          id: 'observations',
+          label: 'Readings by date',
+          /* The body is a grid this page already built and routes rows to, so
+             the factory mounts it rather than making a second one. */
+          view: (element) => {
+            element.append(observationsPane);
+            observationsGrid.rows.refresh({ force: true });
+            observationsGrid.columns.fit();
+            return observationsGrid;
+          },
+          config: {},
+        },
+        {
+          id: 'vintages',
+          label: 'As first published',
+          view: (element) => {
+            element.append(vintagePane);
+            if (built.vintages) built.vintages.reveal();
+            return built.vintages || {};
+          },
+          config: {},
+        },
+      ],
+      onTabChange: () => {
+        /* A grid mounted while its panel was hidden measured a box of nothing.
+           Asking it to lay out again once it is on screen is all it needs. */
+        window.requestAnimationFrame(() => {
+          observationsGrid.rows.refresh({ force: true });
+          observationsGrid.columns.fit();
+          if (built.vintages) built.vintages.reveal();
+        });
+      },
+    });
+    built.tabs = tabs;
+
+    built.vintages = root.FredDemo.buildVintages({
+      root: vintagePane,
+      createGrid,
+      createStat,
+      createChart,
+      createDataRouter,
+      snapshot,
+      data,
+    });
+
+    /* ---------------- the footer ---------------- */
+
+    const footer = el('footer', 'foot');
+    const credit = el('p', null, meta.citation);
+    footer.append(credit);
+    footer.append(
+      el(
+        'p',
+        null,
+        'FRED does not allow browser requests, so this page shows a saved copy refreshed nightly. ' +
+          'Every figure is a figure a US federal agency published; none of it is modelled here.',
+      ),
+    );
+    host.append(footer);
+
+    /* ---------------- keeping it all in step ---------------- */
+
+    catalogueGrid.on('selection:changed', () => {
+      rebuildTiles();
+      showSelectedColumns();
+      drawChart();
+    });
+
+    /** Show a column in the observations grid for each selected series. */
+    function showSelectedColumns() {
+      const chosen = new Set(selectedSeries());
+      const show = [];
+      const hide = [];
+      for (const row of data.catalogue) (chosen.has(row.sid) ? show : hide).push(row.sid);
+      if (hide.length) observationsGrid.columns.hide(hide);
+      if (show.length) observationsGrid.columns.show(show);
+      /* A handful of columns in a wide panel leaves most of it blank, and the
+         set changes every time the reader ticks a box, so the fit is asked for
+         again each time rather than once at build. */
+      if (observationsGrid.element && observationsGrid.element.isConnected) observationsGrid.columns.fit();
+    }
+
+    rebuildTiles();
+    showSelectedColumns();
+    setMode('level');
+
+    built.selectedSeries = selectedSeries;
+    built.drawChart = drawChart;
+    built.rebuildTiles = rebuildTiles;
+    built.setIndexBase = (month) => {
+      baseInput.value = month;
+      setIndexBase(month);
+      router.load(data.stream);
+      if (built.mode === 'index') drawChart();
+    };
+
+    built.destroy = () => {
+      if (built.chart) built.chart.destroy();
+      if (built.kpi) built.kpi.destroy();
+      if (built.vintages && built.vintages.destroy) built.vintages.destroy();
+      tabs.destroy();
+      router.destroy();
+      catalogueGrid.destroy();
+      chartGrid.destroy();
+      tileGrid.destroy();
+      observationsGrid.destroy();
+    };
+
+    return built;
+  }
+
+  root.FredDemo.buildDashboard = buildDashboard;
+})(typeof globalThis !== 'undefined' ? globalThis : window);

@@ -1,0 +1,49 @@
+name: Refresh the saved copy
+
+on:
+  schedule:
+    # Nightly, after the US statistical agencies' morning releases have landed.
+    - cron: '30 9 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# One refresh at a time. A run already under way is left to finish, so two
+# builds never race to commit the same files.
+concurrency:
+  group: refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the demo
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # With the secret set, the build reads each series' own description and
+      # every vintage date FRED holds. Without it, the build runs keyless off
+      # the CSV endpoints and the curated list, and writes the same files. The
+      # page cannot tell which one built them.
+      - name: Build the snapshot from FRED
+        env:
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+        run: node tools/build-snapshot.mjs
+
+      - name: Commit it, if anything changed
+        run: |
+          if git diff --quiet -- data/snapshot; then
+            echo "The saved copy is unchanged."
+            exit 0
+          fi
+          git config user.name 'fred-refresh[bot]'
+          git config user.email 'fred-refresh[bot]@users.noreply.github.com'
+          git add data/snapshot
+          git commit -m "Refresh the saved FRED copy"
+          git push

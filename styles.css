@@ -1,0 +1,576 @@
+/* The page around the grid. The grid brings its own stylesheet. */
+
+:root {
+  --ink: #101828;
+  --ink-soft: #475467;
+  --line: #e4e7ec;
+  --page: #f7f8fa;
+  --panel: #ffffff;
+  --accent: #123a6b;
+  --live: #1b8a3f;
+  --alarm: #b42318;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+}
+
+body {
+  background: var(--page);
+  color: var(--ink);
+  font: 14px/1.5 "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 100vh;
+  padding: 16px 20px 12px;
+}
+
+/* The masthead */
+
+.head {
+  align-items: flex-end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  justify-content: space-between;
+}
+
+.head h1 {
+  color: var(--accent);
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  margin: 0 0 3px;
+}
+
+.lede {
+  color: var(--ink-soft);
+  margin: 0;
+  max-width: 88ch;
+}
+
+.head-note {
+  align-items: center;
+  color: var(--ink-soft);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 12px;
+  gap: 10px;
+  /* The provenance line carries a whole sentence about where the data came
+     from and when. Left unbreakable it sets the width of the masthead, and on
+     a phone that one line pushed the whole page sideways. It wraps instead. */
+  min-width: 0;
+}
+
+.pill {
+  align-items: center;
+  background: var(--accent);
+  border-radius: 999px;
+  color: #fff;
+  display: inline-flex;
+  font-size: 11px;
+  font-weight: 600;
+  gap: 6px;
+  letter-spacing: 0.02em;
+  padding: 4px 10px;
+  text-transform: uppercase;
+}
+
+/* The pulse that shows a poll landed. */
+.dot {
+  background: #9fe0b4;
+  border-radius: 50%;
+  height: 7px;
+  transition: background 0.2s ease, transform 0.2s ease;
+  width: 7px;
+}
+
+.dot.beat {
+  background: #ffffff;
+  transform: scale(1.5);
+}
+
+.freshness {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.freshness.failed {
+  color: var(--alarm);
+  font-weight: 600;
+}
+
+/* The stat tiles (createStat) */
+
+.stat-strip {
+  display: grid;
+  flex: 0 0 auto;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+/*
+ * One card per figure.
+ *
+ * The wrapper is the cell the tile sits in, not a card of its own -- two
+ * boxes each drawing a border, a background and a padding read as a card
+ * inside a card. The card is the tile itself, drawn below.
+ */
+.stat-box {
+  min-width: 0;
+}
+
+/*
+ * The tile's card. `createStat` already asks for one, but the rule it uses
+ * names `--lattice-bg` and `--lattice-border`, and the theme publishes
+ * `--lattice-background` and `--lattice-border-color`, so the tile computes a
+ * transparent background and no border and nothing is drawn. Naming the
+ * demo's own panel colours here is what puts the card on the page; the
+ * module keeps its padding, its radius and the status band down the leading
+ * edge, which is a more specific rule and so survives the border below.
+ */
+.stat-box .lat-stat {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  /* The strip is a row of equals. The cell stretches to the tallest of them
+     already; the card inside it sizes to its own text, so one tile with a
+     confidence interval and a note under it left the other two short. */
+  height: 100%;
+}
+
+.stat-box .lat-stat__title {
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.stat-box .lat-stat__value {
+  color: var(--accent);
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+  margin-top: 2px;
+}
+
+.stat-box .lat-stat__delta {
+  font-size: 13px;
+  font-weight: 600;
+  margin-top: 2px;
+}
+
+.stat-box .lat-stat__delta[data-tone='good'] {
+  color: var(--live);
+}
+
+.stat-box .lat-stat__delta[data-tone='bad'] {
+  color: var(--alarm);
+}
+
+.stat-box .lat-stat__delta[data-tone='flat'] {
+  color: var(--ink-soft);
+}
+
+.stat-box .lat-stat__interval {
+  color: var(--ink-soft);
+  font-size: 12px;
+  margin-top: 3px;
+}
+
+.stat-box .lat-stat__footer {
+  color: var(--ink-soft);
+  font-size: 11px;
+  margin-top: 6px;
+}
+
+/* The status bar down the edge is the tile's own: `createStat` sets
+   `data-tone` on the panel it draws, never on this wrapper. */
+
+/* The KPI strip */
+
+/* A row of tiles, each of which draws its own card. The strip itself is
+   layout only, for the same reason `.stat-box` is. */
+.kpi-strip {
+  display: block;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+/*
+ * The tiles' own card. The KPI module draws each tile with the grid theme's
+ * variables; naming the demo's panel colours here is what makes a tile a white
+ * card on this page's grey background, and a fixed minimum height is what
+ * stops a row of tiles stepping up and down as one of them loses its movement
+ * line.
+ */
+.kpi-strip .lat-kpi__tile {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  min-height: 92px;
+  padding: 10px 12px;
+}
+
+/*
+ * A compact figure is short by construction, and the tiles are sized so it
+ * fits. Saying so here as well means a figure is never quietly replaced by an
+ * ellipsis if a locale renders one wider than expected.
+ */
+.kpi-strip .lat-kpi__value {
+  font-size: 1.35em;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.kpi-strip .lat-kpi__label {
+  white-space: normal;
+}
+
+.kpi-panel {
+  min-width: 0;
+}
+
+/* A tile for a reading that is words rather than a number. */
+.kpi-named {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+  padding: 8px 12px;
+}
+
+.kpi-named-value {
+  font-size: 18px;
+  font-weight: 650;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kpi-named-label {
+  color: var(--ink-soft);
+  font-size: 12px;
+  margin-top: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Charts */
+
+.chart-section {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.chart-box.tall {
+  height: 360px;
+}
+
+.chart-note {
+  color: var(--ink-soft);
+  font-size: 12px;
+  margin: 0;
+}
+
+.empty-note {
+  color: var(--ink-soft);
+  font-size: 13px;
+  margin: 0;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 8px;
+  height: 420px;
+  overflow: hidden;
+  padding: 10px 12px 12px;
+}
+
+/* The chart's own grid is a data path, not a view: it is never mounted. */
+.hidden-grid {
+  display: none;
+}
+
+.chart-box {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  padding: 4px;
+}
+
+.chart-error {
+  color: var(--alarm);
+  font-size: 12px;
+  padding: 10px;
+}
+
+/* The controls */
+
+.actions {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.actions[hidden] {
+  display: none;
+}
+
+.actions-label {
+  color: var(--ink-soft);
+  font-size: 12px;
+  margin-right: 2px;
+}
+
+.action {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 11px;
+}
+
+.action:hover {
+  background: #eef2f7;
+  border-color: #c7d2e0;
+}
+
+.action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.action.toggle.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+/* Tabs and panes */
+
+/*
+ * The tabs module adds its own class to the element it is given and injects a
+ * stylesheet that sets `height: 100%` on it. That stylesheet arrives after this
+ * one, so a rule of equal weight here would lose; `#app` in front of the class
+ * is what gives this one the last word on how tall the strip is.
+ */
+#app .tabs-host {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  height: 820px;
+  overflow: hidden;
+  padding: 10px 12px 12px;
+}
+
+/*
+ * The tabs module lays its panels out absolutely inside a relative container,
+ * which is how a hidden tab costs nothing. That makes each panel exactly as
+ * tall as the strip, so a panel whose content is taller than that scrolls
+ * inside itself rather than pushing the page sideways.
+ */
+.tabs-host .lat-tabs__panel {
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+/* The "as first published" view: controls, a chart beside a tile, a table. */
+
+.vintage-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 100%;
+}
+
+.vintage-split {
+  display: grid;
+  flex: 0 0 auto;
+  gap: 10px;
+  grid-template-columns: minmax(0, 3fr) minmax(220px, 1fr);
+}
+
+.vintage-side {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.vintage-slider {
+  accent-color: var(--accent);
+  flex: 1 1 160px;
+  max-width: 280px;
+  min-width: 0;
+}
+
+.vintage-readout {
+  font-weight: 650;
+  min-width: 0;
+}
+
+.vintage-pane .grid-pane {
+  flex: 1 1 auto;
+  min-height: 300px;
+}
+
+.tab-bar {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.grid-pane {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Waiting and failure */
+
+.loading {
+  margin: auto;
+  max-width: 480px;
+  text-align: center;
+}
+
+.loading h1 {
+  color: var(--accent);
+  font-size: 20px;
+  margin: 0 0 8px;
+}
+
+.loading-message {
+  color: var(--ink-soft);
+  margin: 0 0 14px;
+}
+
+.loading-bar {
+  background: var(--line);
+  border-radius: 999px;
+  height: 6px;
+  overflow: hidden;
+}
+
+.loading-fill {
+  background: var(--accent);
+  height: 100%;
+  transition: width 0.2s ease;
+  width: 0;
+}
+
+/* The credit line */
+
+.foot {
+  border-top: 1px solid var(--line);
+  color: var(--ink-soft);
+  flex: 0 0 auto;
+  font-size: 12px;
+  padding-top: 10px;
+}
+
+.foot p {
+  margin: 0 0 2px;
+}
+
+.foot a {
+  color: var(--accent);
+}
+
+/* Said when the saved copy is standing in for data that could not be fetched. */
+.notice {
+  background: #fdf3e3;
+  border: 1px solid #f0d9a8;
+  border-radius: 7px;
+  color: #6b4d12;
+  margin: 8px 0 0;
+  padding: 6px 10px;
+}
+
+
+/* ------------------------------------------------------------------ */
+/* One column on a phone                                               */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Below this width the page stops being a dashboard laid out across and
+ * becomes a single column read down. Every multi-column strip folds to one
+ * track, the charts get a height of their own instead of sharing a row's,
+ * and nothing is allowed to set a width the screen has to scroll to reach.
+ *
+ * The KPI panel sizes its own tracks from `--lat-kpi-tile-min`, which
+ * `columns: 4` sets as an inline style on the panel; `!important` is what
+ * lets a stylesheet have the last word over that inline value, so the four
+ * columns asked for on a desktop become one here rather than four tiles too
+ * narrow to read.
+ */
+@media (max-width: 640px) {
+  #app {
+    padding: 12px 12px 10px;
+  }
+
+  .head h1 {
+    font-size: 19px;
+  }
+
+  .stat-strip,
+  .vintage-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .chart-box.tall {
+    height: 260px;
+  }
+
+  .panel {
+    height: 380px;
+  }
+
+  #app .tabs-host {
+    height: 900px;
+  }
+
+  .vintage-slider {
+    max-width: 100%;
+  }
+
+  .kpi-panel.lat-kpi {
+    --lat-kpi-tile-min: 100% !important;
+  }
+}
