@@ -186,6 +186,11 @@ try {
   const pending = new Map();
   let consoleErrors = [];
   let pageErrors = [];
+  /* Everything the page said, at any level. A `[lattice]` diagnostic is a warn,
+     not an error, so a check that only watched errors never saw one -- and the
+     grid says "'sort' is not a configuration key this grid recognises, so it
+     had no effect" in exactly that voice. */
+  let diagnostics = [];
 
   socket.onmessage = (event) => {
     const message = JSON.parse(event.data);
@@ -196,15 +201,19 @@ try {
       else ok(message.result);
       return;
     }
-    if (message.method === 'Runtime.consoleAPICalled' && message.params.type === 'error') {
-      consoleErrors.push(message.params.args.map((a) => a.value ?? a.description ?? a.type).join(' '));
+    if (message.method === 'Runtime.consoleAPICalled') {
+      const text = message.params.args.map((a) => a.value ?? a.description ?? a.type).join(' ');
+      if (message.params.type === 'error') consoleErrors.push(text);
+      if (/\[lattice\]/.test(text)) diagnostics.push(text);
     }
     if (message.method === 'Runtime.exceptionThrown') {
       const details = message.params.exceptionDetails;
       pageErrors.push(details.exception?.description || details.text);
     }
-    if (message.method === 'Log.entryAdded' && message.params.entry.level === 'error') {
-      consoleErrors.push(message.params.entry.text);
+    if (message.method === 'Log.entryAdded') {
+      const text = message.params.entry.text || '';
+      if (message.params.entry.level === 'error') consoleErrors.push(text);
+      if (/\[lattice\]/.test(text)) diagnostics.push(text);
     }
   };
 
@@ -250,6 +259,7 @@ try {
   const open = async (url, label) => {
     consoleErrors = [];
     pageErrors = [];
+    diagnostics = [];
     console.log(`\n--- ${label} ---\n${url}`);
     await call('Page.navigate', { url });
     await waitFor('!!(window.__fredDemo)', 120000, `${label} to load`);
@@ -272,6 +282,14 @@ try {
   const noErrors = (label) => {
     check(consoleErrors.length === 0, `${label}: no console errors`, consoleErrors.slice(0, 3).join(' | '));
     check(pageErrors.length === 0, `${label}: no page errors`, pageErrors.slice(0, 3).join(' | '));
+    /*
+     * And nothing the grid itself wanted to tell a developer. A `[lattice]`
+     * line is the grid saying an option was not understood, or was declared in
+     * a place it is not read: a page that draws correctly can still be built on
+     * one of those, and this is the check that will not let it.
+     */
+    check(diagnostics.length === 0, `${label}: the grid logged no [lattice] diagnostics`,
+      diagnostics.slice(0, 4).join(' | '));
   };
 
   /* =================================================================== */
@@ -283,6 +301,7 @@ try {
   const catalogue = JSON.parse(await readFile(join(root, 'data', 'snapshot', 'series.json'), 'utf8'));
   const observations = JSON.parse(await readFile(join(root, 'data', 'snapshot', 'observations.json'), 'utf8'));
   const vintages = JSON.parse(await readFile(join(root, 'data', 'snapshot', 'vintages.json'), 'utf8'));
+  const realtime = JSON.parse(await readFile(join(root, 'data', 'snapshot', 'realtime.json'), 'utf8'));
 
   const bySeries = new Map();
   for (const row of observations) {
@@ -980,6 +999,195 @@ try {
   await evaluate(`window.__fredDemo.catalogueGrid.selection.set(${JSON.stringify(meta.defaultSelection.map((x) => `S:${x}`))})`);
   await sleep(700);
 
+  /* =================================================================== */
+  /* The whole-dashboard rewind.                                          */
+  /* =================================================================== */
+
+  const rewindReady = await evaluate(`(() => {
+    const d = window.__fredDemo;
+    return {
+      stream: d.stream,
+      dates: d.rewind.dates().length,
+      first: d.rewind.dates()[0],
+      last: d.rewind.dates()[d.rewind.dates().length - 1],
+      ticks: document.querySelectorAll('.rewind .timeline-tick').length,
+      chip: !!document.querySelector('.rewind .chip'),
+      note: (document.querySelector('.rewind .panel-caption') || {}).textContent || '',
+      pill: (document.querySelector('.head-note .pill') || {}).textContent || '',
+    };
+  })()`);
+  console.log(`  rewind stream: ${JSON.stringify(rewindReady.stream)}`);
+  console.log(`  rewind timeline: ${rewindReady.dates} months, ${rewindReady.first} to ${rewindReady.last}, `
+    + `${rewindReady.ticks} ticks`);
+  check(rewindReady.stream.deltas > 0, 'the stream carries a delta per published value',
+    `${rewindReady.stream.deltas}`);
+  check(rewindReady.stream.buffered >= rewindReady.stream.deltas,
+    "the router's buffer kept every one of them rather than evicting the early ones",
+    `${rewindReady.stream.buffered} buffered against ${rewindReady.stream.deltas} deltas `
+      + `and ${rewindReady.stream.catalogueDeltas} catalogue rows`);
+  check(rewindReady.dates > 12, 'the rewind timeline offers a month at a time', `${rewindReady.dates}`);
+  check(rewindReady.ticks > 12, 'and draws a tick for them', `${rewindReady.ticks}`);
+  check(rewindReady.chip, 'there is a chip that jumps to the pandemic quarter');
+  check(/no vintage history|revision history/i.test(rewindReady.note),
+    'the rewind says how much history this copy holds', rewindReady.note);
+  check(rewindReady.pill.trim() === 'Saved copy', 'the page opens at today', rewindReady.pill);
+
+  /* Rewind to May 2020 and insist the numbers are the numbers of that day. */
+  const gdp = meta.defaultSelection.find((sid) => !isRateSeries((catalogue.find((r) => r.id === sid) || {}).units))
+    || meta.defaultSelection[0];
+  const rewound = await evaluate(`(async () => {
+    const d = window.__fredDemo;
+    const before = {
+      tile: d.kpi.tile('${gdp}__latest').value,
+      catalogue: d.catalogueGrid.rows.value('S:${gdp}', 'latestValue'),
+      latestDate: d.catalogueGrid.rows.value('S:${gdp}', 'latestDate'),
+      readings: d.tileGrid.rows.count(),
+      months: d.observationsGrid.rows.count(),
+    };
+    const started = performance.now();
+    d.rewind.goToDate('2020-05-01');
+    await new Promise((r) => setTimeout(r, 900));
+    const after = {
+      date: d.rewind.date(),
+      scrubMs: d.lastScrubMs,
+      wallMs: Math.round(performance.now() - started),
+      tile: d.kpi.tile('${gdp}__latest').value,
+      catalogue: d.catalogueGrid.rows.value('S:${gdp}', 'latestValue'),
+      latestDate: d.catalogueGrid.rows.value('S:${gdp}', 'latestDate'),
+      readings: d.tileGrid.rows.count(),
+      months: d.observationsGrid.rows.count(),
+      pill: (document.querySelector('.head-note .pill') || {}).textContent || '',
+      banner: (document.querySelector('.head-note .freshness') || {}).textContent || '',
+      backShown: !(document.querySelector('.head-note .action') || {}).hidden,
+      chartRows: d.chartGrid.rows.count(),
+    };
+    return { before, after };
+  })()`);
+  console.log(`  rewound to ${rewound.after.date}: ${gdp} ${rewound.before.tile} -> ${rewound.after.tile}, `
+    + `latest reading ${rewound.before.latestDate} -> ${rewound.after.latestDate}, `
+    + `readings ${rewound.before.readings} -> ${rewound.after.readings}, months ${rewound.before.months} -> ${rewound.after.months}`);
+  console.log(`  scrub took ${rewound.after.scrubMs} ms (${rewound.after.wallMs} ms including the redraw)`);
+  console.log(`  banner: ${rewound.after.banner}`);
+
+  check(rewound.after.date >= '2020-04-01' && rewound.after.date <= '2020-05-31',
+    'the chip lands on the pandemic quarter', rewound.after.date);
+  check(rewound.after.latestDate < rewound.before.latestDate,
+    `rewinding takes ${gdp} back to the last reading published by then`,
+    `${rewound.before.latestDate} -> ${rewound.after.latestDate}`);
+  check(rewound.after.tile !== rewound.before.tile && rewound.after.tile != null,
+    `and the ${gdp} tile shows the value published by then`,
+    `${rewound.before.tile} -> ${rewound.after.tile}`);
+  check(rewound.after.catalogue === rewound.after.tile,
+    'the catalogue agrees with the tile, so the table went back too',
+    `catalogue ${rewound.after.catalogue}, tile ${rewound.after.tile}`);
+  check(rewound.after.readings < rewound.before.readings,
+    'readings published after that day are gone from the routes',
+    `${rewound.before.readings} -> ${rewound.after.readings}`);
+  /*
+   * The readings table's newest month is the newest reading any selected series
+   * had published by that day. It only shrinks when every selected series has a
+   * revision history to be rewound through: one that has none is stamped at the
+   * floor of the window and is simply there at every point, which is what the
+   * note under the timeline says out loud.
+   */
+  const newestThen = await evaluate(`(() => {
+    const d = window.__fredDemo;
+    let newest = null;
+    d.observationsGrid.rows.forEach((r) => { if (r && r.data && (!newest || r.data.d > newest)) newest = r.data.d; });
+    const latest = d.selectedSeries().map((sid) => d.catalogueGrid.rows.value('S:' + sid, 'latestDate')).filter(Boolean);
+    return { newest, expected: latest.sort()[latest.length - 1] };
+  })()`);
+  check(newestThen.newest === newestThen.expected,
+    'the readings table stops at the newest reading any selected series had published by then',
+    `table ${newestThen.newest}, series ${newestThen.expected}`);
+  check(rewound.after.chartRows > 0, 'the chart still has a series to draw', `${rewound.after.chartRows}`);
+  check(rewound.after.pill.trim() === 'Rewound', 'the banner says the page is rewound', rewound.after.pill);
+  check(/as it stood on/i.test(rewound.after.banner), 'and names the day', rewound.after.banner);
+  check(rewound.after.backShown, 'with a way back to today');
+
+  /* The value shown is the one the saved matrix says was published by then. */
+  const expectedThen = (() => {
+    const entry = (realtime || []).find((e) => e.s === gdp);
+    if (!entry) return null;
+    const cut = `${rewound.after.date}`;
+    const seen = new Map();
+    for (const [d, v, from] of entry.r) if (from <= cut) seen.set(d, v);
+    let best = null;
+    for (const [d, v] of seen) if (!best || d > best.d) best = { d, v };
+    return best;
+  })();
+  if (expectedThen) {
+    check(near(rewound.after.tile, expectedThen.v, 1e-9),
+      `and it is the value the saved matrix holds for ${expectedThen.d} as at ${rewound.after.date}`,
+      `${rewound.after.tile}, expected ${expectedThen.v}`);
+  }
+
+  await shoot('05-rewound');
+
+  /* Back to today restores every one of them. */
+  const restoredRewind = await evaluate(`(async () => {
+    const d = window.__fredDemo;
+    d.rewind.goTo(d.rewind.dates().length - 1);
+    await new Promise((r) => setTimeout(r, 900));
+    return {
+      tile: d.kpi.tile('${gdp}__latest').value,
+      catalogue: d.catalogueGrid.rows.value('S:${gdp}', 'latestValue'),
+      readings: d.tileGrid.rows.count(),
+      months: d.observationsGrid.rows.count(),
+      pill: (document.querySelector('.head-note .pill') || {}).textContent || '',
+    };
+  })()`);
+  console.log(`  back to today: ${gdp} ${restoredRewind.tile}, readings ${restoredRewind.readings}`);
+  check(near(restoredRewind.tile, rewound.before.tile, 1e-9), 'going back to today restores the tile',
+    `${restoredRewind.tile} vs ${rewound.before.tile}`);
+  check(restoredRewind.readings === rewound.before.readings, 'and every reading',
+    `${restoredRewind.readings} vs ${rewound.before.readings}`);
+  check(restoredRewind.months === rewound.before.months, 'and every month in the table',
+    `${restoredRewind.months} vs ${rewound.before.months}`);
+  check(restoredRewind.pill.trim() === 'Saved copy', 'and the banner', restoredRewind.pill);
+
+  /* Play walks it forward and stops at the end. */
+  const played = await evaluate(`(async () => {
+    const d = window.__fredDemo;
+    d.rewind.goTo(d.rewind.dates().length - 4);
+    await new Promise((r) => setTimeout(r, 400));
+    const from = d.rewind.index();
+    d.rewind.play();
+    const playingAtOnce = d.rewind.playing();
+    await new Promise((r) => setTimeout(r, 900));
+    const moved = d.rewind.index();
+    await new Promise((r) => setTimeout(r, 2600));
+    return {
+      from, playingAtOnce, moved,
+      ended: d.rewind.index(),
+      last: d.rewind.dates().length - 1,
+      stillPlaying: d.rewind.playing(),
+    };
+  })()`);
+  console.log(`  play: from ${played.from}, moved to ${played.moved}, ended at ${played.ended} of ${played.last}`);
+  check(played.playingAtOnce, 'Play starts');
+  check(played.moved > played.from, 'Play advances the timeline', `${played.from} -> ${played.moved}`);
+  check(played.ended === played.last, 'and walks it to the end', `${played.ended} of ${played.last}`);
+  check(!played.stillPlaying, 'and stops there rather than looping for ever');
+
+  /* The callout that says the other tab exists, and does something. */
+  const calloutWorks = await evaluate(`(async () => {
+    const callout = document.querySelector('.callout');
+    const before = window.__fredDemo.tabs.tab('vintages') ? 'mounted' : 'not mounted';
+    const link = callout && callout.querySelector('.link-button');
+    if (link) link.click();
+    await new Promise((r) => setTimeout(r, 1200));
+    const active = [...document.querySelectorAll('.lat-tabs__tab')]
+      .filter((t) => t.getAttribute('aria-selected') === 'true')
+      .map((t) => t.textContent.trim());
+    return { text: callout ? callout.textContent.trim() : null, before, active };
+  })()`);
+  console.log(`  callout: "${calloutWorks.text}" -> active tab ${calloutWorks.active.join(', ')}`);
+  check(!!calloutWorks.text && /revised since it was first announced/i.test(calloutWorks.text),
+    'the first tab says the numbers have been revised', calloutWorks.text);
+  check(calloutWorks.active.some((t) => /first published/i.test(t)),
+    'and its link switches to the tab that replays them', calloutWorks.active.join(', '));
+
   noErrors('the dashboard');
 
   /* =================================================================== */
@@ -1084,18 +1292,58 @@ try {
     'the largest-revision tile reports exactly that revision',
     `tile ${vintage.statText}, expected ${expectedOpening.revision}`);
 
-  /* Every vintage the snapshot holds is reachable on the slider. */
-  const slider = await evaluate(`(() => {
-    const el = document.querySelector('.vintage-slider');
-    return { min: Number(el.min), max: Number(el.max), value: Number(el.value), dates: window.__fredDemo.vintages.dates.length };
+  /* The timeline: a bar the width of the panel, a tick per vintage, and the
+     date in type a reader can see from across the room. */
+  const timeline = await evaluate(`(() => {
+    const pane = document.querySelector('.vintage-pane');
+    const range = pane.querySelector('.timeline-range');
+    const bar = pane.querySelector('.timeline');
+    return {
+      found: !!bar,
+      width: bar ? Math.round(bar.getBoundingClientRect().width) : 0,
+      paneWidth: Math.round(pane.getBoundingClientRect().width),
+      min: Number(range.min),
+      max: Number(range.max),
+      value: Number(range.value),
+      ticks: pane.querySelectorAll('.timeline-tick').length,
+      date: (pane.querySelector('.timeline-date') || {}).textContent || '',
+      fontSize: Math.round(parseFloat(getComputedStyle(pane.querySelector('.timeline-date')).fontSize)),
+      buttons: [...pane.querySelectorAll('.timeline-controls button')].map((b) => b.textContent.trim()),
+      dates: window.__fredDemo.vintages.dates.length,
+    };
   })()`);
-  console.log(`  slider: ${slider.dates} vintage dates, position ${slider.value} of ${slider.max}`);
+  console.log(`  timeline: ${timeline.dates} vintages, ${timeline.ticks} ticks, ${timeline.width}px of `
+    + `${timeline.paneWidth}px, date "${timeline.date}" at ${timeline.fontSize}px, buttons ${timeline.buttons.join(' ')}`);
   const savedVintages = vintages.filter((v) => v.series === vintage.series_).length;
-  check(slider.dates === savedVintages,
-    'the slider offers every vintage the snapshot saved for the series',
-    `${slider.dates}, expected ${savedVintages}`);
-  check(slider.max === slider.dates - 1 && slider.min === 0,
-    'the slider spans exactly those vintages', `${slider.min}..${slider.max} for ${slider.dates}`);
+  check(timeline.found, 'the vintages tab has a timeline rather than a slider between two words');
+  check(timeline.width > timeline.paneWidth * 0.9, 'it is the width of the panel',
+    `${timeline.width} of ${timeline.paneWidth}`);
+  check(timeline.dates === savedVintages,
+    'it offers every vintage the snapshot saved for the series',
+    `${timeline.dates}, expected ${savedVintages}`);
+  check(timeline.max === timeline.dates - 1 && timeline.min === 0,
+    'and spans exactly those vintages', `${timeline.min}..${timeline.max} for ${timeline.dates}`);
+  check(timeline.ticks > 20, 'with a tick mark per vintage', `${timeline.ticks}`);
+  check(timeline.fontSize >= 16, 'the date it is parked on is in large type', `${timeline.fontSize}px`);
+  check(timeline.buttons.length === 4, 'it has step, play and back-to-today controls', timeline.buttons.join(' '));
+  check(timeline.buttons.some((b) => /play/i.test(b)), 'including Play', timeline.buttons.join(' '));
+
+  /* Play walks the vintages forward and stops. */
+  const vintagePlay = await evaluate(`(async () => {
+    const t = window.__fredDemo.vintages.timeline;
+    t.goTo(t.dates().length - 3);
+    await new Promise((r) => setTimeout(r, 400));
+    const from = t.index();
+    t.play();
+    const playing = t.playing();
+    await new Promise((r) => setTimeout(r, 2400));
+    return { from, playing, ended: t.index(), last: t.dates().length - 1, stillPlaying: t.playing() };
+  })()`);
+  console.log(`  vintage play: ${vintagePlay.from} -> ${vintagePlay.ended} of ${vintagePlay.last}`);
+  check(vintagePlay.playing, 'Play starts on the vintages timeline');
+  check(vintagePlay.ended === vintagePlay.last, 'and walks it to the newest vintage',
+    `${vintagePlay.ended} of ${vintagePlay.last}`);
+  check(!vintagePlay.stillPlaying, 'and stops there');
 
   /* A rate series' revisions are in points and carry no percentage column. */
   const rateRevisions = await evaluate(`(async () => {
@@ -1148,6 +1396,16 @@ try {
   console.log(`  scrub: ${scrubbed.earliest.vintage} -> ${scrubbed.earliest.rows} rows; `
     + `${scrubbed.today.vintage} -> ${scrubbed.today.rows} rows`);
   check(scrubbed.earliest.rows > 0, 'rewinding to the earliest vintage still shows readings', `${scrubbed.earliest.rows}`);
+  const earliestNote = await evaluate(`(() => {
+    const v = window.__fredDemo.vintages;
+    v.scrubToIndex(0);
+    return (document.querySelector('.vintage-pane .chart-empty') || {}).textContent || null;
+  })()`);
+  await sleep(500);
+  check(!!earliestNote && /one reading had been published/i.test(earliestNote),
+    'and says so in words rather than drawing a chart of a single dot', earliestNote);
+  await evaluate('window.__fredDemo.vintages.scrubToIndex(window.__fredDemo.vintages.dates.length - 1)');
+  await sleep(500);
   check(scrubbed.today.rows > scrubbed.earliest.rows, 'rewinding actually removes the readings published later',
     `${scrubbed.earliest.rows} at ${scrubbed.earliest.vintage} vs ${scrubbed.today.rows} at ${scrubbed.today.vintage}`);
   check(!scrubbed.today.travelling, 'going back to today leaves the router at the head of the stream');

@@ -145,6 +145,29 @@ moves in percentage points and a level moves in per cent, so a selection holding
 both is two units, not one. The index puts every series onto one scale, which is
 what it is for.
 
+**Rewind the whole dashboard.** A timeline at the top of the first tab, a month
+a step from January 2015, with arrows, a play button and a way back to today.
+Move it and every viewer on the page goes back with it: the tiles, the chart,
+the catalogue's latest value and change columns, and the readings table all show
+the numbers a reader would have seen on that day, at the values published by
+then. At 30 April 2020 the fed funds rate reads 0.65, oil reads 20.51 and real
+GDP reads 18.99 trillion.
+
+That is the Data Router's time travel over one stream. Every reading the
+snapshot holds is pushed as a delta stamped with the day FRED published that
+value, so a revision is simply a later delta for the same key;
+`scrubTo(date, { by: 'time' })` rebuilds the world as it stood on a chosen day
+and pushes it to every route at once, through the same keyed diff the page uses
+for everything else. The catalogue's four computed numbers ride the same stream,
+because they are read off the readings and would otherwise go on reporting today
+while everything around them went back.
+
+Two honest limits, both said on the page. Readings from before the window opens
+are shown at today's values throughout: they were all published before it, so at
+every point on the timeline they are simply there. And a series the snapshot has
+no revision history for is stamped at the floor of the window and shows today's
+value at every point; the note under the timeline says how many those are.
+
 **"As first published".** The second tab is the demo's reason for existing. Pick
 one of the five headline series (real GDP growth, real GDP, nonfarm payrolls,
 the unemployment rate, the CPI) and a vintage date, and the chart overlays the
@@ -222,6 +245,7 @@ main.js                   reads the saved copy, then starts
 src/licence.js            the key for this demo's own published address
 src/fred-data.js          reading the snapshot and everything derived from it
 src/dashboard.js          the catalogue, the router, the tiles, the chart, the tabs
+src/timeline.js           the timeline: ticks, step, play, back to today
 src/vintages.js           "as first published": the time-travel replay
 styles.css                the page around the grid
 tools/series.mjs          the curated series list and the vintage dates
@@ -246,7 +270,14 @@ tell which one built them:
 | Mode | When | Where the metadata and vintages come from |
 | --- | --- | --- |
 | keyless | no `FRED_API_KEY` in the environment | values from the CSV graph endpoints; titles, units and frequency from `tools/series.mjs`; vintages from ALFRED's CSV endpoint at the fixed dates in that file |
-| keyed | `FRED_API_KEY` is set | values the same; title, units, frequency, seasonal adjustment, last-updated stamp and notes from `fred/series`; every vintage date FRED holds since 2015 from `fred/series/vintagedates`; vintage values from `fred/series/observations` with a real-time range |
+| keyed | `FRED_API_KEY` is set | values the same; title, units, frequency, seasonal adjustment, last-updated stamp and notes from `fred/series`; every vintage date FRED holds since 2015 from `fred/series/vintagedates`; vintage values from `fred/series/observations` with a real-time range; and the real-time matrix of every series, for the whole-dashboard rewind |
+
+FRED refuses a real-time period holding more than two thousand vintage dates,
+and a series the Board of Governors publishes every business day has nearly
+three thousand of them since 2015, so the request is halved until each half is
+one FRED will answer. A series it still will not hand a matrix for is recorded
+in `meta.json` as one without a revision history rather than taken as a reason
+to throw a twelve-minute build away, and the page says how many those are.
 
 The four files:
 
@@ -255,6 +286,7 @@ The four files:
 | `series.json` | one row per catalogue series: what it is and where from |
 | `observations.json` | every reading, long form, `{ s, d, v }` |
 | `vintages.json` | the five headline series as they stood on each vintage date |
+| `realtime.json` | every series' real-time matrix: each row `[observation date, value, published on]` |
 | `meta.json` | when it was built, which way, the citation, and the counts |
 
 The build fails loudly rather than writing a half-built copy: a series FRED

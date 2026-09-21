@@ -384,23 +384,16 @@ async function readVintageKeyed(id, vintage) {
  * @returns {Promise<[string, number, string][]>} `[observation date, value, published on]`
  */
 async function readRealtime(id, points) {
-  const body = await getJson(
-    api('series/observations', {
-      series_id: id,
-      realtime_start: VINTAGE_START,
-      realtime_end: '9999-12-31',
-      observation_start: VINTAGE_START,
-      sort_order: 'asc',
-    }),
-    `the real-time matrix of ${id}`,
-  );
   /* The readings the page shows, by the day FRED stamped them. */
   const wanted = new Map();
   for (const point of points) if (point.d >= VINTAGE_START) wanted.set(point.src, point.d);
 
+  const today = new Date().toISOString().slice(0, 10);
+  const raw = await readRealtimeWindow(id, VINTAGE_START, today);
+
   /* Per observation, the values it has held, oldest publication first. */
   const byObservation = new Map();
-  for (const row of body.observations || []) {
+  for (const row of raw) {
     const shown = wanted.get(row.date);
     if (shown === undefined) continue;
     const value = toValue(row.value);
@@ -423,6 +416,61 @@ async function readRealtime(id, points) {
   }
   out.sort((a, b) => (a[2] === b[2] ? (a[0] < b[0] ? -1 : 1) : a[2] < b[2] ? -1 : 1));
   return out;
+}
+
+/**
+ * One window of a series' real-time matrix, split as far as FRED requires.
+ *
+ * FRED refuses a real-time period holding more than two thousand vintage dates:
+ * "This exceeds the maximum number of vintage dates allowed for this file type
+ * (2000)". A series the Board of Governors publishes every business day has
+ * nearly three thousand of them since 2015, so the window is halved until each
+ * half is one FRED will answer.
+ *
+ * The windows are read oldest first and their rows concatenated in that order.
+ * A value that was already standing when a later window opens comes back with
+ * its `realtime_start` clamped to that window's first day, which would read as
+ * a revision it is not -- so the caller drops any row whose value equals the
+ * one before it for the same observation, and the clamped repeats fall out
+ * there.
+ *
+ * @param {string} id the series
+ * @param {string} from the first day of the window
+ * @param {string} to the last
+ * @returns {Promise<object[]>} FRED's observation rows, oldest window first
+ */
+async function readRealtimeWindow(id, from, to) {
+  try {
+    const body = await getJson(
+      api('series/observations', {
+        series_id: id,
+        realtime_start: from,
+        realtime_end: to,
+        observation_start: VINTAGE_START,
+        sort_order: 'asc',
+      }),
+      `the real-time matrix of ${id} for ${from} to ${to}`,
+    );
+    return body.observations || [];
+  } catch (error) {
+    const message = String((error && error.message) || error);
+    if (!/maximum number of vintage dates/i.test(message) || from >= to) throw error;
+    const middle = new Date((Date.parse(`${from}T00:00:00Z`) + Date.parse(`${to}T00:00:00Z`)) / 2)
+      .toISOString().slice(0, 10);
+    if (middle <= from || middle >= to) throw error;
+    say(`  real time: ${id} -- splitting ${from}..${to} at ${middle}`);
+    const earlier = await readRealtimeWindow(id, from, middle);
+    await pause(200);
+    const later = await readRealtimeWindow(id, nextDay(middle), to);
+    return earlier.concat(later);
+  }
+}
+
+/** The ISO day after another. */
+function nextDay(date) {
+  const at = new Date(`${date}T00:00:00Z`);
+  at.setUTCDate(at.getUTCDate() + 1);
+  return at.toISOString().slice(0, 10);
 }
 
 /**

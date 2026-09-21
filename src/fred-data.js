@@ -30,18 +30,27 @@
    * @returns {Promise<{series: object[], observations: object[], vintages: object[], meta: object}>}
    */
   async function readSnapshot(onProgress) {
-    const names = ['meta', 'series', 'observations', 'vintages'];
+    const names = ['meta', 'series', 'observations', 'vintages', 'realtime'];
     const out = {};
     for (let i = 0; i < names.length; i += 1) {
       const name = names[i];
       if (onProgress) onProgress(`Reading the saved copy (${name})...`, i / names.length);
       const response = await fetch(`${SNAPSHOT}/${name}.json`, { cache: 'no-cache' });
       if (!response.ok) {
+        /* A copy built before the rewind existed has no real-time matrix. The
+           dashboard still draws; the rewind says it has nothing to rewind. */
+        if (name === 'realtime' && response.status === 404) { out[name] = []; continue; }
         throw new Error(`The saved copy could not be read: ${SNAPSHOT}/${name}.json answered ${response.status}.`);
       }
       out[name] = await response.json();
     }
-    return { meta: out.meta, series: out.series, observations: out.observations, vintages: out.vintages };
+    return {
+      meta: out.meta,
+      series: out.series,
+      observations: out.observations,
+      vintages: out.vintages,
+      realtime: out.realtime,
+    };
   }
 
   /**
@@ -228,6 +237,209 @@
   }
 
   /**
+   * Turn the real-time matrix into one ordered stream of deltas.
+   *
+   * Every row of the matrix is a moment: on day `from`, the reading for `d`
+   * became `v`. A revision is simply a later row for the same reading. Fed to
+   * the router in that order, each stamped with its publication day, the buffer
+   * holds the real history of the numbers and `scrubTo` can put the whole
+   * dashboard back to any day in it.
+   *
+   * Readings from before the window are one batch at the floor of it: they were
+   * all published before it opened, so at every point on the timeline they are
+   * simply there. The page says as much.
+   *
+   * @param {object} data the prepared catalogue and readings
+   * @param {object[]} realtime the saved matrix, one entry a series
+   * @param {string} start the first day the matrix covers
+   * @returns {{base: object[], deltas: object[], days: string[], revisions: number}}
+   *   the rows that predate the window, the stamped deltas, every distinct
+   *   publication day, and how many of the deltas are revisions rather than
+   *   first prints
+   */
+  function realtimeStream(data, realtime, start) {
+    const byKey = new Map();
+    for (const reading of data.readings) byKey.set(reading.id, reading);
+
+    const base = [];
+    for (const reading of data.readings) if (reading.d < start) base.push(reading);
+
+    const deltas = [];
+    const days = new Set();
+    let revisions = 0;
+    for (const entry of realtime || []) {
+      const seen = new Set();
+      for (const [d, v, from] of entry.r || []) {
+        const id = `${entry.s}@${d}`;
+        const known = byKey.get(id);
+        /* A reading the current snapshot no longer carries (a series revised an
+           observation away) has nothing on the page to move, so it is skipped
+           rather than invented. */
+        if (!known) continue;
+        if (seen.has(d)) revisions += 1;
+        seen.add(d);
+        days.add(from);
+        deltas.push({ ...known, v, pub: toTime(from), from });
+      }
+    }
+    deltas.sort((a, b) => (a.pub === b.pub ? 0 : a.pub < b.pub ? -1 : 1));
+    return { base, deltas, days: [...days].sort(), revisions };
+  }
+
+  /**
+   * The catalogue, as it stood on every day the numbers behind it moved.
+   *
+   * The catalogue's "latest value", "change on the period before" and the two
+   * year-on-year columns are not stored anywhere: they are read off the
+   * readings. So a rewind of the readings has to carry a rewind of the
+   * catalogue with it, or the table at the centre of the page would go on
+   * reporting today while everything around it went back.
+   *
+   * One pass over the deltas in publication order, keeping each series' visible
+   * readings as they accumulate, emitting a catalogue row whenever one of those
+   * four numbers actually moves. A series whose reading was revised by a
+   * thousandth still emits; a day on which nothing about it changed does not.
+   *
+   * @param {object} data the prepared catalogue and readings
+   * @param {object[]} base the readings that predate the window
+   * @param {object[]} deltas the stamped readings, in publication order
+   * @returns {object[]} catalogue rows, each stamped with its publication day
+   */
+  function catalogueStream(data, base, deltas) {
+    /** @type {Map<string, {values: Map<string, number>, dates: string[]}>} */
+    const state = new Map();
+    for (const row of data.catalogue) state.set(row.sid, { values: new Map(), dates: [] });
+
+    /** Note a reading, keeping the date list sorted and duplicate-free. */
+    const note = (sid, d, v) => {
+      const st = state.get(sid);
+      if (!st) return false;
+      if (!st.values.has(d)) {
+        /* Dates arrive close to order, so a walk back from the end beats a
+           binary search and keeps the array sorted without a re-sort. */
+        let at = st.dates.length;
+        while (at > 0 && st.dates[at - 1] > d) at -= 1;
+        st.dates.splice(at, 0, d);
+      }
+      st.values.set(d, v);
+      return true;
+    };
+
+    for (const reading of base) note(reading.s, reading.d, reading.v);
+
+    /** The four numbers the catalogue shows, from what is visible now. */
+    const numbers = (sid) => {
+      const st = state.get(sid);
+      const entry = data.byId.get(sid);
+      const n = st.dates.length;
+      if (!n) return { latestDate: null, latestValue: null, change: null, yoyPoints: null, yoyPercent: null };
+      const latestDate = st.dates[n - 1];
+      const latestValue = st.values.get(latestDate);
+      const previous = n > 1 ? st.values.get(st.dates[n - 2]) : undefined;
+      const ago = st.values.get(yearBefore(latestDate));
+      const change = previous === undefined ? null : latestValue - previous;
+      const yoyChange = ago === undefined ? null : latestValue - ago;
+      return {
+        latestDate,
+        latestValue,
+        change,
+        yoyChange,
+        yoyPoints: entry.rate ? yoyChange : null,
+        yoyPercent: !entry.rate && yoyChange !== null && ago !== 0 ? (yoyChange / Math.abs(ago)) * 100 : null,
+        readings: n,
+      };
+    };
+
+    const out = [];
+    const last = new Map();
+    let i = 0;
+    while (i < deltas.length) {
+      const day = deltas[i].from;
+      const touched = new Set();
+      while (i < deltas.length && deltas[i].from === day) {
+        if (note(deltas[i].s, deltas[i].d, deltas[i].v)) touched.add(deltas[i].s);
+        i += 1;
+      }
+      for (const sid of touched) {
+        const entry = data.byId.get(sid);
+        const figures = numbers(sid);
+        const signature = `${figures.latestDate}|${figures.latestValue}|${figures.change}|`
+          + `${figures.yoyPoints}|${figures.yoyPercent}`;
+        if (last.get(sid) === signature) continue;
+        last.set(sid, signature);
+        out.push({ ...entry, ...figures, pub: deltas[i - 1].pub, from: day });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * The catalogue as it stood at the floor of the window, before any delta.
+   *
+   * The same four numbers as `catalogueStream` computes, over the readings that
+   * predate the window alone. This is what the page shows if a reader winds the
+   * timeline all the way back.
+   *
+   * @param {object} data the prepared catalogue and readings
+   * @param {object[]} base the readings that predate the window
+   * @returns {object[]} one row per series
+   */
+  function catalogueAtFloor(data, base) {
+    const bySeries = new Map();
+    for (const reading of base) {
+      if (!bySeries.has(reading.s)) bySeries.set(reading.s, []);
+      bySeries.get(reading.s).push(reading);
+    }
+    return data.catalogue.map((entry) => {
+      const mine = bySeries.get(entry.sid) || [];
+      mine.sort((a, b) => (a.d < b.d ? -1 : 1));
+      const n = mine.length;
+      const latest = n ? mine[n - 1] : null;
+      const previous = n > 1 ? mine[n - 2] : null;
+      const agoRow = latest ? mine.find((r) => r.d === yearBefore(latest.d)) : null;
+      const yoyChange = latest && agoRow ? latest.v - agoRow.v : null;
+      return {
+        ...entry,
+        latestDate: latest ? latest.d : null,
+        latestValue: latest ? latest.v : null,
+        change: latest && previous ? latest.v - previous.v : null,
+        yoyChange,
+        yoyPoints: entry.rate ? yoyChange : null,
+        yoyPercent: !entry.rate && yoyChange !== null && agoRow && agoRow.v !== 0
+          ? (yoyChange / Math.abs(agoRow.v)) * 100 : null,
+        readings: n,
+      };
+    });
+  }
+
+  /**
+   * The months a whole-dashboard rewind can stop at.
+   *
+   * One step a month rather than one a publication day: a dashboard is read a
+   * month at a time, and a hundred and forty steps is a timeline a reader can
+   * aim at where two thousand is a smear.
+   *
+   * @param {string} start the first day the matrix covers
+   * @param {string} end the last
+   * @returns {string[]} the last day of each month in the range, oldest first
+   */
+  function rewindDates(start, end) {
+    const out = [];
+    let year = Number(start.slice(0, 4));
+    let month = Number(start.slice(5, 7));
+    while (true) {
+      /* The last moment of the month: everything published in it counts. */
+      const last = new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
+      if (last > end) break;
+      out.push(last);
+      month += 1;
+      if (month > 12) { month = 1; year += 1; }
+    }
+    if (!out.length || out[out.length - 1] < end) out.push(end);
+    return out;
+  }
+
+  /**
    * The vintages, indexed for the "as first published" view.
    *
    * @param {object[]} vintages the saved vintage records
@@ -301,6 +513,10 @@
     isRateSeries,
     readSnapshot,
     prepare,
+    realtimeStream,
+    catalogueStream,
+    catalogueAtFloor,
+    rewindDates,
     indexVintages,
     revisionsFor,
     toTime,

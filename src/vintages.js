@@ -14,7 +14,7 @@
  *
  * The replay is the Data Router's own time travel, not a lookup. Each vintage
  * is pushed into the router as a batch of deltas stamped with that vintage's
- * date, and the router records them into its bounded buffer. Moving the slider
+ * date, and the router records them into its bounded buffer. Moving the timeline
  * calls `scrubTo(date, { by: 'time' })`, and the router rebuilds the grid --
  * through the same keyed diff it uses live -- to exactly what had been
  * published by then. `live()` returns to the newest vintage.
@@ -190,20 +190,22 @@
     picker.value = OPENING_SERIES;
     bar.append(picker);
 
-    bar.append(el('span', 'actions-label', 'As it stood on:'));
-    const slider = el('input', 'vintage-slider');
-    slider.type = 'range';
-    slider.min = '0';
-    slider.step = '1';
-    slider.setAttribute('aria-label', 'The date to rewind to');
-    bar.append(slider);
-    const readout = el('span', 'vintage-readout', 'no vintage');
-    bar.append(readout);
-
-    const liveButton = el('button', 'action', 'Back to today');
-    liveButton.type = 'button';
-    bar.append(liveButton);
     host.append(bar);
+
+    /*
+     * The timeline, the width of the panel, with a tick per vintage. The small
+     * range input this replaced sat between two words in the toolbar, and a
+     * reader looking for the time travel did not find it.
+     */
+    const timeline = root.FredDemo.createTimeline({
+      host,
+      label: 'As it stood on',
+      unit: 'vintage',
+      endLabel: 'Back to today',
+      dates: [],
+      onChange: (at) => scrubTo(at),
+    });
+    built.timeline = timeline;
 
     const story = el('p', 'chart-note');
     host.append(story);
@@ -237,7 +239,6 @@
         { id: 'which', field: 'which', title: 'Vintage' },
         { id: 'v', field: 'v', title: 'Value', type: 'number' },
       ],
-      sort: [{ col: 'd', dir: 'asc' }],
     });
     built.asPublishedGrid = asPublishedGrid;
 
@@ -254,9 +255,13 @@
       find: true,
       title: 'Every reading, as first published and as it stands now',
       columns: revisionColumns('', false),
-      sort: [{ col: 'd', dir: 'desc' }],
     });
     built.revisionsGrid = revisionsGrid;
+
+    /* Asked for after the grids exist: `sort` is not a configuration key, and
+       given one the grid says so and leaves the rows in arrival order. */
+    asPublishedGrid.sort.set([{ col: 'd', dir: 'asc' }]);
+    revisionsGrid.sort.set([{ col: 'd', dir: 'desc' }]);
 
     /** The two lines the chart draws, named where the reader sees them. */
     const AS_PUBLISHED = 'As published then';
@@ -364,8 +369,7 @@
        * revised the series on, and the two lists share almost no dates.
        */
       const opening = openingIndex(revisions, dates);
-      slider.max = String(dates.length - 1);
-      slider.value = String(opening);
+      timeline.setDates(dates, opening);
       scrubTo(opening);
       drawChart();
     }
@@ -373,21 +377,24 @@
     /**
      * Rewind the grid to one vintage.
      *
-     * @param {number} position the index of the vintage in the slider's list
+         * @param {number} position the index of the vintage in the timeline
      * @returns {void}
      */
     function scrubTo(position) {
       const dates = built.dates;
       const vintage = dates[Math.max(0, Math.min(dates.length - 1, position))];
+      if (vintage === undefined) return;
       built.vintage = vintage;
-      readout.textContent = longDate(vintage);
       if (position >= dates.length - 1) {
         built.router.live();
       } else {
         built.router.scrubTo(Date.parse(`${vintage}T23:59:59Z`), { by: 'time' });
       }
       tellTheStory();
-      if (built.chart) built.chart.draw();
+      /* Rebuilt rather than redrawn: at the earliest vintages there is one
+         reading and no line to draw, and which of those two the panel shows is
+         decided in `drawChart`. */
+      drawChart();
     }
 
     /** Say, in a sentence, what the two lines on the chart are. */
@@ -420,6 +427,22 @@
       if (built.chart) { built.chart.destroy(); built.chart = null; }
       chartBox.textContent = '';
       const entry = data.byId.get(built.series);
+      /*
+       * At the earliest vintages a series has one reading, and one reading is
+       * not a chart: two dots on a single day, an axis with one tick, and a
+       * shape that says nothing. The sentence beside it does the work instead
+       * until there is a line to draw.
+       */
+      const spread = new Set(asPublishedGrid.rows.data().map((row) => row.d));
+      if (spread.size < 2) {
+        const note = el('p', 'chart-empty');
+        note.textContent = spread.size
+          ? `Only one reading had been published by ${longDate(built.vintage)}. `
+            + 'Step forward to see the line take shape.'
+          : `Nothing had been published by ${longDate(built.vintage)}.`;
+        chartBox.append(note);
+        return;
+      }
       built.chart = createChart({
         grid: asPublishedGrid,
         container: chartBox,
@@ -442,12 +465,7 @@
 
     /* ---------------- wiring ---------------- */
 
-    slider.addEventListener('input', () => scrubTo(Number(slider.value)));
     picker.addEventListener('change', () => loadSeries(picker.value));
-    liveButton.addEventListener('click', () => {
-      slider.value = slider.max;
-      scrubTo(Number(slider.max));
-    });
 
     loadSeries(OPENING_SERIES);
 
@@ -456,12 +474,10 @@
       asPublishedGrid.rows.refresh({ force: true });
       if (built.chart) built.chart.draw();
     };
-    built.scrubToIndex = (position) => {
-      slider.value = String(position);
-      scrubTo(position);
-    };
+    built.scrubToIndex = (position) => timeline.goTo(position);
     built.loadSeries = loadSeries;
     built.destroy = () => {
+      timeline.destroy();
       if (built.chart) built.chart.destroy();
       if (built.stat) built.stat.destroy();
       if (built.router) built.router.destroy();

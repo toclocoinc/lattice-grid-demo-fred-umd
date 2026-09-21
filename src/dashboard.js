@@ -397,16 +397,36 @@
     header.append(heading);
 
     const provenance = el('div', 'head-note');
-    provenance.append(el('span', 'pill', 'Saved copy'));
-    const freshness = el(
-      'span',
-      'freshness',
-      `FRED does not allow browser requests, so this page shows a saved copy refreshed nightly. ` +
-        `Taken ${new Date(meta.builtAt).toLocaleString('en-GB')}.`,
-    );
+    const modePill = el('span', 'pill', 'Saved copy');
+    provenance.append(modePill);
+    const freshness = el('span', 'freshness', '');
     provenance.append(freshness);
+    const backToToday = el('button', 'action', 'Back to today');
+    backToToday.type = 'button';
+    backToToday.hidden = true;
+    backToToday.addEventListener('click', () => built.rewind && built.rewind.goTo(rewindDates.length - 1));
+    provenance.append(backToToday);
     header.append(provenance);
     host.append(header);
+
+    const takenOn = `FRED does not allow browser requests, so this page shows a saved copy refreshed `
+      + `nightly. Taken ${new Date(meta.builtAt).toLocaleString('en-GB')}.`;
+
+    /** Say whether the page is showing today or a day in the past. */
+    function sayWhen(date, atEnd) {
+      if (atEnd) {
+        modePill.textContent = 'Saved copy';
+        modePill.classList.remove('rewound');
+        freshness.textContent = takenOn;
+        backToToday.hidden = true;
+        return;
+      }
+      modePill.textContent = 'Rewound';
+      modePill.classList.add('rewound');
+      freshness.textContent = `Showing the dashboard as it stood on ${longDate(date)} \u00b7 rewound. `
+        + 'Every figure is the figure that had been published by then.';
+      backToToday.hidden = false;
+    }
 
     /* ---------------- the grids ---------------- */
 
@@ -427,7 +447,6 @@
         ranges: false,
         fillHandle: false,
       },
-      sort: [{ col: 'category', dir: 'asc' }, { col: 'title', dir: 'asc' }],
     }));
     built.catalogueGrid = catalogueGrid;
 
@@ -473,9 +492,18 @@
       rowKey: 'd',
       selection: 'none',
       columns: observationColumns(data.catalogue),
-      sort: [{ col: 'd', dir: 'desc' }],
     }));
     built.observationsGrid = observationsGrid;
+
+    /*
+     * The order is asked for after the grids exist, not inside their
+     * configuration. `sort` is not a configuration key: given one, the grid
+     * says so in a `[lattice]` diagnostic and leaves the table in whatever
+     * order the rows arrived in, which for the catalogue was the order the
+     * snapshot happened to be written in.
+     */
+    catalogueGrid.sort.set([{ col: 'category', dir: 'asc' }, { col: 'title', dir: 'asc' }]);
+    observationsGrid.sort.set([{ col: 'd', dir: 'desc' }]);
 
     /* ---------------- the router ---------------- */
 
@@ -528,9 +556,34 @@
       };
     }
 
+    /*
+     * The stream, in publication order.
+     *
+     * Every reading the snapshot holds, stamped with the day FRED published
+     * that value; a revision is simply a later delta for the same key. The
+     * catalogue's own four computed numbers ride the same stream, because they
+     * are read off the readings and would otherwise go on reporting today while
+     * everything around them went back.
+     */
+    const rewindStart = (meta.realtime && meta.realtime.start) || meta.vintageStart;
+    const stream = root.FredDemo.realtimeStream(data, snapshot.realtime, rewindStart);
+    const catalogueDeltas = root.FredDemo.catalogueStream(data, stream.base, stream.deltas);
+    const floor = root.FredDemo.catalogueAtFloor(data, stream.base);
+    const rewindDates = root.FredDemo.rewindDates(rewindStart, data.lastDate);
+    built.stream = {
+      base: stream.base.length,
+      deltas: stream.deltas.length,
+      revisions: stream.revisions,
+      catalogueDeltas: catalogueDeltas.length,
+      days: stream.days.length,
+      dates: rewindDates.length,
+    };
+
     const router = createDataRouter({
       key: 'kind',
       rowKey: 'id',
+      /* The day a value was published: the axis the whole page rewinds along. */
+      time: 'pub',
       /* Three routes and a subscriber all want the same partition: without
          this, only the first of them would ever receive a row. */
       overlap: true,
@@ -560,11 +613,108 @@
     router.link(catalogueGrid, tileGrid, { from: 'sid', to: 's' });
     router.link(catalogueGrid, observationsGrid, { from: 'sid', to: 's' });
 
-    /* The catalogue first, so the default selection can be made before the
-       24,000 readings arrive and every route is narrow from its first paint. */
-    router.load(data.catalogue);
+    /*
+     * The buffer has to be asked for before anything is applied, and asked for
+     * by size: the router keeps ten thousand deltas by default and this stream
+     * is longer than that, so the oldest would be folded into the base and the
+     * early part of the timeline would have nothing to rewind to.
+     */
+    router.buffer({ max: 200000 });
+
+    /*
+     * The floor of the window first -- the catalogue and every reading
+     * published before the timeline opens -- so the default selection can be
+     * made before the rest arrives and every route is narrow from its first
+     * paint. Then the whole stream in ONE apply: the router records each delta
+     * in the buffer separately but settles the routes once, which is the
+     * difference between a page that builds in under a second and one that
+     * materialises a hundred and forty times.
+     */
+    /* A day before the window opens, so nothing in the base can be scrubbed
+       away by a reader who winds the timeline all the way back. */
+    const floorTime = root.FredDemo.toTime(rewindStart) - 86400000;
+    router.apply([
+      ...floor.map((row) => ({ op: 'upsert', row: { ...row, pub: floorTime } })),
+      ...stream.base.map((row) => ({ op: 'upsert', row: { ...row, pub: floorTime } })),
+    ]);
     catalogueGrid.selection.set(meta.defaultSelection.map((sid) => `S:${sid}`));
-    router.load(data.stream);
+    const applyStarted = performance.now();
+    router.apply([
+      ...stream.deltas.map((row) => ({ op: 'upsert', row })),
+      ...catalogueDeltas.map((row) => ({ op: 'upsert', row })),
+    ].sort((a, b) => (a.row.pub === b.row.pub ? 0 : a.row.pub < b.row.pub ? -1 : 1)));
+    built.stream.applyMs = Math.round(performance.now() - applyStarted);
+    built.stream.buffered = router.buffered;
+
+    /* ---------------- rewinding the whole dashboard ---------------- */
+
+    /*
+     * One timeline, and everything on the page moves with it. The router holds
+     * the stream of every reading stamped with the day it was published, so
+     * `scrubTo` rebuilds the world as it stood on a chosen day and pushes it to
+     * every route at once: the catalogue, the chart, the tiles and the readings
+     * table all go back together, through the keyed diff, without any of them
+     * knowing that time is what moved.
+     */
+    const rewindHost = el('section', 'rewind');
+    rewindHost.setAttribute('aria-label', 'Rewind the dashboard');
+    const rewindNote = el('p', 'panel-caption');
+    host.append(rewindHost);
+
+    /** The day the rewind is parked on, as milliseconds. */
+    function rewindTime(at) {
+      const date = rewindDates[Math.max(0, Math.min(rewindDates.length - 1, at))];
+      return root.FredDemo.toTime(date) + 86399000;
+    }
+
+    /**
+     * Put the whole page back to one day, and tell it to redraw.
+     *
+     * @param {number} at the index into the timeline's dates
+     * @param {boolean} [force] re-apply even at the end, to re-run the routes'
+     *   own transforms after the index base has moved
+     * @returns {void}
+     */
+    function applyRewind(at, force) {
+      const atEnd = at >= rewindDates.length - 1;
+      built.rewindAt = at;
+      built.rewound = !atEnd;
+      const started = performance.now();
+      if (atEnd) router.live();
+      else router.scrubTo(rewindTime(at), { by: 'time' });
+      built.lastScrubMs = Math.round(performance.now() - started);
+      if (force && atEnd) router.live();
+      sayWhen(rewindDates[at], atEnd);
+      rebuildTiles();
+      drawChart();
+    }
+
+    const rewind = root.FredDemo.createTimeline({
+      host: rewindHost,
+      label: 'Show this dashboard as it stood on',
+      unit: 'month',
+      endLabel: 'Back to today',
+      dates: rewindDates,
+      onChange: (at) => applyRewind(at),
+    });
+    built.rewind = rewind;
+    built.rewindAt = rewindDates.length - 1;
+
+    /* The pandemic quarter, before it was revised: the reason this exists. */
+    const tryChip = el('button', 'action chip', 'Try: 1 May 2020');
+    tryChip.type = 'button';
+    tryChip.addEventListener('click', () => rewind.goToDate('2020-05-01'));
+    const chipRow = el('div', 'actions');
+    chipRow.append(tryChip, rewindNote);
+    rewindHost.append(chipRow);
+
+    const without = (meta.realtime && meta.realtime.seriesWithoutHistory) || 0;
+    rewindNote.textContent = without
+      ? `${without} of ${meta.counts.series} series have no vintage history in this copy, so the rewind `
+        + 'shows those at today\u2019s values. Readings from before '
+        + `${longDate(rewindStart)} are shown at today\u2019s values throughout.`
+      : `Every series carries its own revision history. Readings from before ${longDate(rewindStart)} `
+        + 'are shown at today\u2019s values throughout.';
 
     /* ---------------- the tiles ---------------- */
 
@@ -678,9 +828,9 @@
     baseInput.addEventListener('change', () => {
       if (!baseInput.value) return;
       setIndexBase(baseInput.value);
-      /* Re-running the whole snapshot through the router is a keyed diff, so
-         only the numbers that actually changed reach a grid. */
-      router.load(data.stream);
+      /* The index is derived in the route's own transform, which runs when the
+         router next settles a route, so the rewind is re-applied to make it. */
+      applyRewind(built.rewindAt, true);
       if (built.mode === 'index') drawChart();
     });
     toolbar.append(baseInput);
@@ -941,7 +1091,25 @@
     cataloguePanel.append(cataloguePane);
     host.append(cataloguePanel);
 
+    /*
+     * The thing a reader would never guess is there. The second tab replays the
+     * revisions one series at a time; this is the line that says so, on the tab
+     * they land on.
+     */
     const tabsHost = el('section', 'tabs-host');
+    const callout = el('p', 'callout');
+    callout.append(document.createTextNode(
+      'Every number here has been revised since it was first announced. The ',
+    ));
+    const calloutLink = el('button', 'link-button', '\u201cAs first published\u201d tab');
+    calloutLink.type = 'button';
+    calloutLink.addEventListener('click', () => {
+      if (built.tabs) built.tabs.activate('vintages');
+      tabsHost.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    });
+    callout.append(calloutLink);
+    callout.append(document.createTextNode(' replays the revisions.'));
+    host.append(callout);
     host.append(tabsHost);
 
     const vintagePane = el('div', 'vintage-pane');
@@ -1047,6 +1215,8 @@
     rebuildTiles();
     showSelectedColumns();
     setMode('level');
+    sayWhen(rewindDates[rewindDates.length - 1], true);
+    built.applyRewind = applyRewind;
 
     built.selectedSeries = selectedSeries;
     built.drawChart = drawChart;
@@ -1054,11 +1224,12 @@
     built.setIndexBase = (month) => {
       baseInput.value = month;
       setIndexBase(month);
-      router.load(data.stream);
+      applyRewind(built.rewindAt, true);
       if (built.mode === 'index') drawChart();
     };
 
     built.destroy = () => {
+      rewind.destroy();
       if (built.chart) built.chart.destroy();
       if (built.kpi) built.kpi.destroy();
       if (built.vintages && built.vintages.destroy) built.vintages.destroy();

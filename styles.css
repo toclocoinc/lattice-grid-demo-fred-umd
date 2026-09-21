@@ -294,6 +294,157 @@ body {
   white-space: nowrap;
 }
 
+/* The timeline: a bar you can see, step along and play */
+
+.timeline {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 14px 12px;
+}
+
+.timeline-head {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  min-width: 0;
+}
+
+.timeline-label {
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+.timeline-date {
+  color: var(--accent);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.1;
+}
+
+.timeline-position {
+  color: var(--ink-soft);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.timeline-track {
+  padding-top: 4px;
+  position: relative;
+}
+
+/*
+ * The ticks sit under the range input's own track, one per date, so the bar
+ * reads as a scale with a hundred and twenty stops on it rather than as a
+ * featureless groove.
+ */
+.timeline-ticks {
+  height: 9px;
+  left: 8px;
+  pointer-events: none;
+  position: absolute;
+  right: 8px;
+  top: 0;
+}
+
+.timeline-tick {
+  background: #c7d2e0;
+  bottom: 0;
+  position: absolute;
+  top: 0;
+  width: 1px;
+}
+
+.timeline-range {
+  accent-color: var(--accent);
+  display: block;
+  margin: 0;
+  width: 100%;
+}
+
+.timeline-controls {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.timeline-step {
+  font-size: 13px;
+  line-height: 1;
+  min-width: 34px;
+  padding: 5px 8px;
+}
+
+.timeline-play.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.timeline.at-end .timeline-date {
+  color: var(--ink);
+}
+
+/* Rewinding the whole dashboard */
+
+.rewind {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pill.rewound {
+  background: #8a4b12;
+}
+
+.chip {
+  background: #eef2f7;
+  border-color: #c7d2e0;
+  font-weight: 600;
+}
+
+/* The line that says the second tab exists */
+
+.callout {
+  background: #eef4fb;
+  border: 1px solid #cfe0f3;
+  border-radius: 8px;
+  color: var(--ink);
+  flex: 0 0 auto;
+  font-size: 13px;
+  margin: 0;
+  padding: 8px 12px;
+}
+
+.link-button {
+  background: none;
+  border: 0;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 650;
+  padding: 0;
+  text-decoration: underline;
+}
+
+.link-button:hover {
+  text-decoration: none;
+}
+
+.link-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 /* Charts */
 
 .chart-section {
@@ -345,6 +496,14 @@ body {
   min-width: 0;
   overflow: hidden;
   padding: 4px;
+}
+
+.chart-empty {
+  color: var(--ink-soft);
+  font-size: 13px;
+  margin: 0;
+  padding: 24px 12px;
+  text-align: center;
 }
 
 .chart-error {
@@ -511,18 +670,6 @@ body {
   min-width: 0;
 }
 
-.vintage-slider {
-  accent-color: var(--accent);
-  flex: 1 1 160px;
-  max-width: 280px;
-  min-width: 0;
-}
-
-.vintage-readout {
-  font-weight: 650;
-  min-width: 0;
-}
-
 .vintage-pane .chart-box.tall {
   height: 260px;
 }
@@ -650,8 +797,8 @@ body {
     height: 660px;
   }
 
-  .vintage-slider {
-    max-width: 100%;
+  .timeline-date {
+    font-size: 17px;
   }
 
   .kpi-panel.lat-kpi {
