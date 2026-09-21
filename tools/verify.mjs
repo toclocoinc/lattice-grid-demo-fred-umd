@@ -102,6 +102,20 @@ function freePort() {
   });
 }
 
+/**
+ * The rule, restated here rather than read off the page.
+ *
+ * `src/fred-data.js` owns `isRateSeries`; this is the same predicate written
+ * again in Node, so a check of the page's arithmetic is not the page's own
+ * arithmetic handed back.
+ *
+ * @param {string} units the series' units
+ * @returns {boolean} true when a change in it belongs in percentage points
+ */
+function isRateSeries(units) {
+  return /percent/i.test(String(units || ''));
+}
+
 /** The ISO date one calendar year before another. */
 function yearBefore(date) {
   return `${Number(date.slice(0, 4)) - 1}${date.slice(4)}`;
@@ -284,11 +298,18 @@ try {
     const list = bySeries.get(id) || [];
     return list.length ? list[list.length - 1] : null;
   };
+  /**
+   * What the year-on-year tile should read: points for a rate, per cent for a
+   * level, computed here from the saved files.
+   */
   const yoyOf = (id) => {
     const latest = latestOf(id);
     if (!latest) return null;
     const ago = valueAt(id, yearBefore(latest.d));
-    return ago === null || ago === 0 ? null : ((latest.v - ago) / Math.abs(ago)) * 100;
+    if (ago === null) return null;
+    const row = catalogue.find((r) => r.id === id);
+    if (isRateSeries(row && row.units)) return latest.v - ago;
+    return ago === 0 ? null : ((latest.v - ago) / Math.abs(ago)) * 100;
   };
 
   const near = (a, b, eps) => a != null && b != null && Math.abs(a - b) <= eps * Math.max(1, Math.abs(b));
@@ -451,6 +472,83 @@ try {
   const heights = new Set(tiles.painted.map((p) => p.height));
   check(heights.size === 1, 'every tile is the same height', [...heights].join(', '));
 
+  /* ---- a change in a rate is points, never a percentage of the rate ---- */
+
+  const rateRule = await evaluate(`(() => {
+    const d = window.__fredDemo;
+    const tile = (id) => {
+      const model = d.kpi.tile(id);
+      const fig = [...document.querySelectorAll('.kpi-strip .lat-kpi__tile')]
+        .find((e) => (e.querySelector('.lat-kpi__label') || {}).textContent === (model && model.label));
+      return {
+        label: model && model.label,
+        value: model && model.value,
+        formatted: model && model.formatted,
+        delta: model ? model.delta : undefined,
+        deltaPercent: model ? model.deltaPercent : undefined,
+        text: fig ? fig.textContent : null,
+      };
+    };
+    return { yoy: tile('UNRATE__yoy'), latest: tile('UNRATE__latest') };
+  })()`);
+  console.log(`  UNRATE tiles: "${rateRule.yoy.label}" = ${rateRule.yoy.formatted}; latest tile text "${rateRule.latest.text}"`);
+  const unrateLatest = latestOf('UNRATE');
+  const unrateAgo = valueAt('UNRATE', yearBefore(unrateLatest.d));
+  check(/percentage points/i.test(rateRule.yoy.label || ''),
+    'the UNRATE year-on-year tile is labelled in percentage points', rateRule.yoy.label);
+  check(near(rateRule.yoy.value, unrateLatest.v - unrateAgo, 1e-9),
+    'the UNRATE year-on-year tile holds the change in points, not a percentage of the rate',
+    `tile ${rateRule.yoy.value}, expected ${unrateLatest.v - unrateAgo} points (a percentage would be ${((unrateLatest.v - unrateAgo) / unrateAgo) * 100})`);
+  check(!/%/.test(rateRule.yoy.text || ''), 'the UNRATE year-on-year tile shows no % anywhere', rateRule.yoy.text);
+  check(rateRule.latest.delta === null && !/%/.test(rateRule.latest.text || ''),
+    "the UNRATE latest tile draws no relative movement line, so no percentage of a rate is shown",
+    `delta ${rateRule.latest.delta}, text "${rateRule.latest.text}"`);
+
+  /* And a level series keeps its percentage, so the rule is a rule and not a
+     blanket removal. */
+  const levelTile = await evaluate(`(() => {
+    const t = window.__fredDemo.kpi.tile('CPIAUCSL__yoy');
+    return { label: t && t.label, value: t && t.value };
+  })()`);
+  check(/per cent/i.test(levelTile.label || ''), 'a level series still reports its year-on-year as a percentage', levelTile.label);
+  check(near(levelTile.value, yoyOf('CPIAUCSL'), 1e-9), 'and that percentage matches the saved data',
+    `${levelTile.value} vs ${yoyOf('CPIAUCSL')}`);
+
+  /* The catalogue's two year-on-year columns: one unit each, never both. */
+  const catalogueUnits = await evaluate(`(() => {
+    const d = window.__fredDemo;
+    const rows = d.catalogueGrid.rows.data();
+    const bad = rows.filter((r) => r.yoyPoints != null && r.yoyPercent != null).map((r) => r.sid);
+    const rateWithPercent = rows.filter((r) => r.rate && r.yoyPercent != null).map((r) => r.sid);
+    const levelWithPoints = rows.filter((r) => !r.rate && r.yoyPoints != null).map((r) => r.sid);
+    return {
+      columns: d.catalogueGrid.columns.visible().map((c) => c.id),
+      bad, rateWithPercent, levelWithPoints,
+      unrate: rows.find((r) => r.sid === 'UNRATE'),
+    };
+  })()`);
+  check(catalogueUnits.bad.length === 0, 'no catalogue row fills both year-on-year columns', catalogueUnits.bad.join(', '));
+  check(catalogueUnits.rateWithPercent.length === 0, 'no rate series is given a year-on-year percentage',
+    catalogueUnits.rateWithPercent.join(', '));
+  check(catalogueUnits.levelWithPoints.length === 0, 'no level series is given a year-on-year in points',
+    catalogueUnits.levelWithPoints.join(', '));
+  check(near(catalogueUnits.unrate.yoyPoints, unrateLatest.v - unrateAgo, 1e-9),
+    "the catalogue's UNRATE year-on-year is the change in points",
+    `${catalogueUnits.unrate.yoyPoints}`);
+
+  /* ---- no em dash in anything a reader sees ---- */
+
+  const dashes = await evaluate(`(() => {
+    const bad = [];
+    const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walk.nextNode())) {
+      if ((node.nodeValue || '').includes('\u2014')) bad.push((node.nodeValue || '').trim().slice(0, 70));
+    }
+    return bad.slice(0, 5);
+  })()`);
+  check(dashes.length === 0, 'no visible text on the page uses an em dash', dashes.join(' | '));
+
   /* ---- the chart ---- */
 
   const chartOf = `(() => {
@@ -502,6 +600,33 @@ try {
     check(drawn.empty === false, `the "${mode}" transformation is not the empty state`);
   }
 
+  /* The change transformations name the unit on the axis, and a selection that
+     mixes a rate with a level is two units rather than one squashed together. */
+  for (const mode of ['pct', 'yoy']) {
+    await evaluate(`window.__fredDemo.setMode(${JSON.stringify(mode)})`);
+    await sleep(500);
+    const axis = await evaluate(`(() => {
+      const d = window.__fredDemo;
+      return {
+        unit: d.unit,
+        series: d.chart.data().series.map((s) => String(s.key)),
+        title: [...d.chart.element.querySelectorAll('text.lat-chartview__axis-title')].map((t) => t.textContent),
+      };
+    })()`);
+    console.log(`  "${mode}": unit ${axis.unit}, series ${axis.series.join(', ')}`);
+    check(axis.unit === 'Percentage points' || axis.unit === 'Per cent',
+      `the "${mode}" chart names the unit it is drawing`, String(axis.unit));
+    check(axis.title.some((t) => t === axis.unit), `the "${mode}" chart labels its value axis with that unit`,
+      axis.title.join(' | '));
+    /* Every series drawn is in that one unit. */
+    const kinds = axis.series.map((sid) => {
+      const row = catalogue.find((r) => r.id === sid);
+      return isRateSeries(row && row.units) ? 'Percentage points' : 'Per cent';
+    });
+    check(kinds.every((k) => k === axis.unit), `the "${mode}" chart draws only the series in that unit`,
+      axis.series.map((sid, i) => `${sid}:${kinds[i]}`).join(', '));
+  }
+
   /* The index really is 100 at the base month, for a series that has one. */
   await evaluate("window.__fredDemo.setMode('index')");
   await sleep(500);
@@ -533,6 +658,7 @@ try {
   })()`);
 
   const extra = catalogue.find((row) => !meta.defaultSelection.includes(row.id) && row.unitGroup === 'Percent');
+  console.log(`  the extra series ticked below: ${extra.id} (${extra.units})`);
   await evaluate(`(() => {
     const d = window.__fredDemo;
     const keys = d.catalogueGrid.selection.keys();
@@ -661,6 +787,40 @@ try {
   check(vintage.stat != null && Math.abs(vintage.stat) > 0, 'the largest-revision tile reports a revision',
     `${vintage.statText}`);
 
+  /* A rate series' revisions are in points and carry no percentage column. */
+  const rateRevisions = await evaluate(`(async () => {
+    const v = window.__fredDemo.vintages;
+    v.loadSeries('UNRATE');
+    await new Promise((r) => setTimeout(r, 700));
+    const rows = v.revisionsGrid.rows.data();
+    const moved = rows.filter((r) => r.revision !== 0);
+    return {
+      series: v.series,
+      rate: v.rate,
+      columns: v.revisionsGrid.columns.visible().map((c) => ({ id: c.id, title: c.title })),
+      rows: rows.length,
+      withPercent: rows.filter((r) => r.revisionPct != null).length,
+      example: moved[0] || rows[0] || null,
+      painted: document.querySelectorAll('.vintage-pane .lat-row[data-index]').length,
+      text: (document.querySelector('.vintage-pane .lat-stat__value') || {}).textContent || null,
+    };
+  })()`);
+  const revisionColumn = rateRevisions.columns.find((c) => c.id === 'revision');
+  console.log(`  UNRATE revisions: ${rateRevisions.rows} rows, columns ${rateRevisions.columns.map((c) => c.id).join(', ')}, `
+    + `example ${JSON.stringify(rateRevisions.example)}`);
+  check(rateRevisions.rate === true, 'the vintages tab knows UNRATE is a rate series', String(rateRevisions.rate));
+  check(!rateRevisions.columns.some((c) => c.id === 'revisionPct'),
+    "a rate series' revisions table has no revision-percentage column at all",
+    rateRevisions.columns.map((c) => c.id).join(', '));
+  check(rateRevisions.withPercent === 0, 'and no row carries a revision percentage', `${rateRevisions.withPercent}`);
+  check(/percentage points/i.test((revisionColumn && revisionColumn.title) || ''),
+    "the revision column says it is in percentage points", revisionColumn && revisionColumn.title);
+  check(rateRevisions.painted > 0, 'the revisions table still paints rows for a rate series', `${rateRevisions.painted}`);
+  check(/pp/.test(rateRevisions.text || ''), 'the largest-revision tile states its unit for a rate series', rateRevisions.text);
+
+  /* Back to the series the tab opens on, for the screenshot. */
+  await evaluate("window.__fredDemo.vintages.loadSeries('A191RL1Q225SBEA')");
+  await sleep(700);
   await shoot('02-vintages');
 
   /* Rewinding changes what is shown, and going back to today restores it. */

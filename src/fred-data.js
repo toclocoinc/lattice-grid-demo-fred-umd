@@ -45,6 +45,27 @@
   }
 
   /**
+   * Is this series measured as a rate?
+   *
+   * THE RULE, IN ONE PLACE. A change in a series whose values are themselves a
+   * rate -- the unemployment rate, a Treasury yield, a growth rate, debt as a
+   * share of GDP -- belongs in PERCENTAGE POINTS, never as a percentage of the
+   * rate. "The unemployment rate fell 4.7 per cent" is a sentence about a
+   * number, not about the labour market; "it fell 0.20 percentage points" is
+   * the fact. An index, a level and a count are not rates, and a percentage
+   * change of one of those is exactly the right reading.
+   *
+   * Everything that computes a change asks this first: the catalogue columns,
+   * the tiles, the chart's transformations and the revisions table.
+   *
+   * @param {string} units the series' units, as FRED states them
+   * @returns {boolean} true when a change in it is measured in points
+   */
+  function isRateSeries(units) {
+    return /percent/i.test(String(units || ''));
+  }
+
+  /**
    * The ISO date one year before another.
    *
    * Calendar arithmetic rather than a fixed number of days, so a monthly series
@@ -65,16 +86,16 @@
   /**
    * Turn the snapshot into the rows the router is fed.
    *
-   * Every reading gains two derived numbers, computed here once rather than in
-   * a chart binding that would redo them on every redraw:
+   * Every reading gains its movement, computed here once rather than in a chart
+   * binding that would redo them on every redraw:
    *
-   *   `pct`   the change on the reading before it, as a percentage
-   *   `yoy`   the change on the reading a calendar year earlier, as a percentage
+   *   `change`      the change on the reading before it, in the series' own units
+   *   `yoyChange`   the same against the reading a calendar year earlier
+   *   `pct` / `yoy` those two as a percentage -- for a LEVEL series only
+   *   `pp` / `yp`   what to draw: points for a rate series, per cent otherwise
    *
-   * Both are a percentage of the series' own values. For a series whose values
-   * are themselves a rate -- the unemployment rate, a Treasury yield -- that is
-   * the change in the rate, not the change in percentage points, and the page
-   * says so where the numbers are shown.
+   * A rate series carries no `pct` or `yoy` at all, because a percentage of a
+   * percentage is not a reading anyone wants. See `isRateSeries`.
    *
    * @param {{series: object[], observations: object[], meta: object}} snapshot the saved copy
    * @returns {{catalogue: object[], readings: object[], stream: object[],
@@ -112,10 +133,15 @@
     const readings = [];
     for (const [id, list] of bySeries) {
       if (!known.has(id)) continue;
+      const rate = isRateSeries(known.get(id).units);
       for (let i = 0; i < list.length; i += 1) {
         const point = list[i];
         const previous = i > 0 ? list[i - 1] : null;
         const ago = valueAt(id, yearBefore(point.d));
+        const change = previous ? point.v - previous.v : null;
+        const yoyChange = ago === null ? null : point.v - ago;
+        const pct = !rate && previous && previous.v !== 0 ? (change / Math.abs(previous.v)) * 100 : null;
+        const yoy = !rate && ago !== null && ago !== 0 ? (yoyChange / Math.abs(ago)) * 100 : null;
         readings.push({
           kind: 'obs',
           id: `${id}@${point.d}`,
@@ -123,9 +149,15 @@
           d: point.d,
           t: toTime(point.d),
           v: point.v,
-          change: previous ? point.v - previous.v : null,
-          pct: previous && previous.v !== 0 ? ((point.v - previous.v) / Math.abs(previous.v)) * 100 : null,
-          yoy: ago !== null && ago !== 0 ? ((point.v - ago) / Math.abs(ago)) * 100 : null,
+          rate,
+          change,
+          yoyChange,
+          pct,
+          yoy,
+          /* What the chart plots for the two change transformations: points for
+             a rate series, per cent for a level or an index. */
+          pp: rate ? change : pct,
+          yp: rate ? yoyChange : yoy,
         });
       }
     }
@@ -134,9 +166,12 @@
     const catalogue = [];
     for (const row of series) {
       const list = bySeries.get(row.id) || [];
+      const rate = isRateSeries(row.units);
       const latest = list.length ? list[list.length - 1] : null;
       const previous = list.length > 1 ? list[list.length - 2] : null;
       const ago = latest ? valueAt(row.id, yearBefore(latest.d)) : null;
+      const change = latest && previous ? latest.v - previous.v : null;
+      const yoyChange = latest && ago !== null ? latest.v - ago : null;
       catalogue.push({
         kind: 'series',
         id: `S:${row.id}`,
@@ -150,10 +185,16 @@
         source: row.source,
         notes: row.notes || null,
         lastUpdated: row.lastUpdated || null,
+        rate,
         latestDate: latest ? latest.d : null,
         latestValue: latest ? latest.v : null,
-        change: latest && previous ? latest.v - previous.v : null,
-        yoy: latest && ago !== null && ago !== 0 ? ((latest.v - ago) / Math.abs(ago)) * 100 : null,
+        /* In the series' own units, always: for a rate series that IS points. */
+        change,
+        yoyChange,
+        /* One column each, so a cell is never ambiguous about its unit: a rate
+           series fills the points column and leaves the per-cent one blank. */
+        yoyPoints: rate ? yoyChange : null,
+        yoyPercent: !rate && yoyChange !== null && ago !== 0 ? (yoyChange / Math.abs(ago)) * 100 : null,
         readings: list.length,
       });
     }
@@ -214,12 +255,16 @@
    * agency announced on the day. The latest is the value in the newest saved
    * vintage. The revision is the difference between them.
    *
+   * A revision to a rate series is stated in percentage points and carries no
+   * percentage at all, for the reason `isRateSeries` gives.
+   *
    * @param {ReturnType<typeof indexVintages>} index the vintage index
    * @param {string} id the series
+   * @param {boolean} [rate] true when the series is measured as a rate
    * @returns {{d: string, first: number, firstVintage: string, latest: number,
    *   revision: number, revisionPct: number|null}[]} one row per observation
    */
-  function revisionsFor(index, id) {
+  function revisionsFor(index, id, rate) {
     const dates = index.datesFor(id);
     if (!dates.length) return [];
     const newest = index.pointsFor(id, dates[dates.length - 1]);
@@ -243,7 +288,7 @@
         firstVintage: firstVintage.get(d),
         latest,
         revision: latest - before,
-        revisionPct: before !== 0 ? ((latest - before) / Math.abs(before)) * 100 : null,
+        revisionPct: rate || before === 0 ? null : ((latest - before) / Math.abs(before)) * 100,
       });
     }
     rows.sort((a, b) => (a.d < b.d ? 1 : -1));
@@ -252,6 +297,7 @@
 
   root.FredDemo = {
     SNAPSHOT,
+    isRateSeries,
     readSnapshot,
     prepare,
     indexVintages,

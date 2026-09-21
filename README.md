@@ -1,8 +1,8 @@
 # The US economy, as it was published
 
-Forty-seven headline US economic series from FRED — output, prices, jobs,
-interest rates, housing, trade, energy and the federal balance sheet — with one
-thing most charting demos do not have: the numbers **as they were first
+Forty-seven headline US economic series from FRED: output, prices, jobs,
+interest rates, housing, trade, energy and the federal balance sheet, with one
+thing most charting demos do not have. The numbers **as they were first
 announced**, set beside the numbers as they stand today.
 
 Built on Lattice Grid loaded by `<script>` tag: no npm install, no bundler, no
@@ -17,8 +17,8 @@ build step, no `type="module"`.
 A published economic statistic is an estimate, and it keeps moving after it is
 announced. The advance estimate of US real GDP for the second quarter of 2020
 was an annualised fall of **32.9%**. It now reads about **28%**. Nothing was
-wrong with either number — the second one has more of the source data behind it
-— but a chart drawn today shows only the second, and every decision taken in
+wrong with either number; the second one has more of the source data behind it.
+But a chart drawn today shows only the second, and every decision taken in
 August 2020 was taken on the first.
 
 ALFRED, the archive beside FRED, keeps every vintage of every series: the
@@ -28,7 +28,7 @@ numbers exactly as they stood on a given day. This demo replays them.
 
 **FRED does not allow browser requests.** Neither `api.stlouisfed.org` nor
 `fred.stlouisfed.org/graph/fredgraph.csv` sends a cross-origin header, so no
-page served from any other address can read FRED in a browser — not this one,
+page served from any other address can read FRED in a browser: not this one,
 and not any other. Everything this page draws is a **saved copy** in
 `data/snapshot/`, built in Node (where that rule does not apply) by
 `tools/build-snapshot.mjs` and refreshed nightly by a scheduled workflow.
@@ -106,7 +106,7 @@ their slices:
 | `tiles` | the same `obs` rows | the KPI tiles |
 | `observations` | the same rows, **rolled up by date** | the readings table, a column per series |
 
-plus a `subscribe` handler — a viewer that is not a grid at all — which keeps
+plus a `subscribe` handler, a viewer that is not a grid at all, which keeps
 the count under the chart honest off the same keyed diff the grids get.
 
 **Ticking a series reloads nothing.** `router.link(catalogue, …)` makes the
@@ -122,32 +122,36 @@ with a column per series. Every series has an aggregate from the start; the link
 means an unselected series' rows never reach the route, so its aggregate sees
 nothing and its column is hidden.
 
-**Four transformations.** Level, percent change on the period before, percent
-change on a year earlier, and an index set to 100 at a month you choose (1970-01
-onwards; 2019-12 by default). The first three are columns the page computes once
-when the snapshot is read; the index is computed in the route's own `transform`,
-so changing the base month re-runs the transform and the keyed diff carries only
-the numbers that moved.
+**Four transformations.** Level, change on the period before, change on a year
+earlier, and an index set to 100 at a month you choose (1970-01 onwards; 2019-12
+by default). The first three are columns the page computes once when the snapshot
+is read; the index is computed in the route's own `transform`, so changing the
+base month re-runs the transform and the keyed diff carries only the numbers that
+moved. Neither change transformation says "%" on the button, because whether it
+is a percentage or a number of percentage points depends on the series, and the
+axis says which.
 
 **Recession shading.** The NBER recession indicator (`USREC`) is fetched and
 turned into vertical bands through the charts module's declarative annotation
-layer. It is never a row in the catalogue — it is shading, and nothing else.
+layer. It is never a row in the catalogue: it is shading, and nothing else.
 
-**One measure axis, deliberately.** A level chart of series measured in
-different units draws one unit at a time, chosen in the toolbar, and names the
-series it is not drawing in the footnote. Percent change and the index put every
-series into the same unit, which is what they are for.
+**One measure axis, one unit on it.** A chart of series measured in different
+units draws one unit at a time, chosen in the toolbar, and names the series it is
+not drawing in the footnote. That applies to a change chart too: a rate series
+moves in percentage points and a level moves in per cent, so a selection holding
+both is two units, not one. The index puts every series onto one scale, which is
+what it is for.
 
 **"As first published".** The second tab is the demo's reason for existing. Pick
-one of the five headline series — real GDP growth, real GDP, nonfarm payrolls,
-the unemployment rate, the CPI — and a vintage date, and the chart overlays the
+one of the five headline series (real GDP growth, real GDP, nonfarm payrolls,
+the unemployment rate, the CPI) and a vintage date, and the chart overlays the
 numbers as announced on that day against the numbers as they stand now. A table
 lists every reading's first print, its current value and the revision in both
 absolute and percentage terms, and a tile reports the largest revision.
 
 The rewind is the Data Router's own **time travel**, not a lookup. Each vintage
 is pushed into the router as a batch of deltas stamped with that vintage's date,
-and only the numbers that actually changed are re-sent — so the router's bounded
+and only the numbers that actually changed are re-sent, so the router's bounded
 buffer holds the real revision history, one delta per revision. Moving the
 slider calls `scrubTo(date, { by: 'time' })` and the router rebuilds the grid,
 through the same keyed diff, to exactly what had been published by then.
@@ -172,16 +176,22 @@ any series whose FRED notes carry a copyright or permission line.
 
 A few things worth knowing about the data:
 
-- **Daily and weekly series are reduced to one reading a month** — the last
+- **Daily and weekly series are reduced to one reading a month**: the last
   reading of the month, stamped on the first of it, which is where FRED stamps a
   monthly series. Nothing is averaged or interpolated: each kept number is a
   number FRED published on a day. It is what lets every series line up on one
   date column.
 - **Readings start at 1970-01-01**; vintage records start at 2015-01-01.
-- **"Change on a year earlier" is a percentage of the series' own values.** For
-  a series whose values are themselves a rate — the unemployment rate, a
-  Treasury yield — that is the change in the rate, not the change in percentage
-  points, and the page says so where the numbers are shown.
+- **A change in a rate is measured in percentage points, never as a percentage
+  of the rate.** "The unemployment rate fell 4.7 per cent" is a sentence about a
+  number; "it fell 0.20 percentage points" is the fact. One helper,
+  `isRateSeries(units)` in `src/fred-data.js`, decides it, and everything that
+  computes a change asks it first: the catalogue's two year-on-year columns (one
+  in points, one in per cent, so a cell is never ambiguous), the tiles, the
+  chart's two change transformations and their axis, and the revisions table,
+  which drops its percentage column entirely for a rate series. A level, a count
+  and an index are not rates, and a percentage change of one of those is exactly
+  the right reading.
 - **A level series is re-based at a comprehensive revision.** Real GDP moved
   from chained 2012 dollars to chained 2017 dollars, so its whole history shifts
   between vintages. That is a change of units, not a change of view about the
@@ -194,7 +204,7 @@ A few things worth knowing about the data:
 - **`cosd`/`coed` are ignored** by the graph endpoints when more than one id is
   asked for.
 - **ALFRED pairs `id` and `vintage_date` positionally**, so `id=GDP,GDP,GDP` with
-  three vintage dates returns three columns — one per vintage — in one request.
+  three vintage dates returns three columns, one per vintage, in one request.
 
 ## Files
 
@@ -270,8 +280,13 @@ leaving the global it documents. It then, in a real browser:
   redraws it with readings rather than empty axes;
 - proves the index really is exactly 100 at the base month;
 - ticks a series in the catalogue and insists the tiles, the chart route, the
-  tile route and the readings table all moved — by exactly that series' readings
-  and no others — then unticks it and insists everything went back;
+  tile route and the readings table all moved, by exactly that series' readings
+  and no others, then unticks it and insists everything went back;
+- insists a rate series states its movement in percentage points and never as a
+  percentage: the `UNRATE` year-on-year tile is labelled in points, carries no
+  `%`, and its latest tile draws no relative movement line at all, and the
+  revisions table for `UNRATE` shows no revision-percentage column;
+- insists no visible text anywhere on the page contains an em dash;
 - opens the vintages tab and insists the overlay chart draws two series, the
   revisions table paints rows, the router's buffer holds the revision history,
   the view opens rewound, the number on screen is the number ALFRED holds for

@@ -27,13 +27,24 @@
 
   const { prepare } = root.FredDemo;
 
-  /** The transformations the chart offers. */
+  /**
+   * The transformations the chart offers.
+   *
+   * The two change transformations do not say "%": whether a change is a
+   * percentage or a number of percentage points depends on the series, and
+   * `isRateSeries` decides it per series. The axis says which.
+   */
   const MODES = [
     { id: 'level', label: 'Level', field: 'v' },
-    { id: 'pct', label: '% change on the period before', field: 'pct' },
-    { id: 'yoy', label: '% change on a year earlier', field: 'yoy' },
+    { id: 'pct', label: 'Change on the period before', field: 'pp' },
+    { id: 'yoy', label: 'Change on a year earlier', field: 'yp' },
     { id: 'index', label: 'Index, 100 at', field: 'idx' },
   ];
+
+  /** What a change in a rate series is measured in. */
+  const POINTS = 'Percentage points';
+  /** What a change in a level or an index is measured in. */
+  const PER_CENT = 'Per cent';
 
   const FRED_SERIES_URL = 'https://fred.stlouisfed.org/series/';
 
@@ -47,7 +58,7 @@
 
   /** A number with a sensible number of digits for its magnitude. */
   function readable(value) {
-    if (value == null || !Number.isFinite(value)) return '—';
+    if (value == null || !Number.isFinite(value)) return 'No data';
     const size = Math.abs(value);
     const digits = size >= 1000 ? 0 : size >= 100 ? 1 : size >= 1 ? 2 : 3;
     return new Intl.NumberFormat('en-GB', { maximumFractionDigits: digits, minimumFractionDigits: digits }).format(value);
@@ -55,7 +66,7 @@
 
   /** A date, written out. */
   function longDate(date) {
-    if (!date) return '—';
+    if (!date) return 'no date';
     return new Date(`${date}T00:00:00Z`).toLocaleDateString('en-GB', {
       day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC',
     });
@@ -72,9 +83,10 @@
    * Every format is a FormatSpec object rather than a function, which is the
    * only shape a column format takes.
    *
+   * @param {{points: number, percent: number}} bars the symmetric bar ranges
    * @returns {object[]} the column definitions
    */
-  function catalogueColumns() {
+  function catalogueColumns(bars) {
     return [
       {
         id: 'title',
@@ -120,18 +132,37 @@
         id: 'change',
         field: 'change',
         title: 'Change on the period before',
+        headerTooltip: "In the series' own units. For a series that is itself a rate, that is percentage points.",
         type: 'number',
         format: { type: 'number', decimals: 2, signed: true },
         layout: { width: 190 },
       },
+      /*
+       * Two columns for the year-on-year movement, not one, because one column
+       * could not say which unit a cell is in. A rate series fills the points
+       * column and leaves the per-cent one empty; a level or an index does the
+       * opposite. Each carries a bar scaled to its own column's real range, so
+       * neither bar is ever a percentage of a percentage.
+       */
       {
-        id: 'yoy',
-        field: 'yoy',
-        title: 'Change on a year earlier',
+        id: 'yoyPoints',
+        field: 'yoyPoints',
+        title: 'On a year earlier, points',
+        headerTooltip: 'For a series that is itself a rate: the change in percentage points.',
+        type: 'number',
+        format: { type: 'number', decimals: 2, suffix: ' pp', signed: true },
+        cell: { decoration: { type: 'bar', min: -bars.points, max: bars.points, origin: 0 } },
+        layout: { width: 180 },
+      },
+      {
+        id: 'yoyPercent',
+        field: 'yoyPercent',
+        title: 'On a year earlier, %',
+        headerTooltip: 'For a level, a count or an index: the change as a percentage.',
         type: 'number',
         format: { type: 'number', decimals: 1, suffix: '%', signed: true },
-        cell: { decoration: { type: 'bar', min: -40, max: 40, origin: 0 } },
-        layout: { width: 190 },
+        cell: { decoration: { type: 'bar', min: -bars.percent, max: bars.percent, origin: 0 } },
+        layout: { width: 170 },
       },
       { id: 'source', field: 'source', title: 'Published by', filter: { type: 'set' }, layout: { width: 280 } },
       {
@@ -252,8 +283,8 @@
       el(
         'p',
         'lede',
-        `${meta.counts.series} headline series from FRED — output, prices, jobs, rates, housing, trade and ` +
-          'the federal balance sheet — with the numbers as they were first announced set beside the numbers ' +
+        `${meta.counts.series} headline series from FRED: output, prices, jobs, rates, housing, trade and ` +
+          'the federal balance sheet, with the numbers as they were first announced set beside the numbers ' +
           'as they stand today. Built with Lattice Grid loaded by script tag: no install, no build step.',
       ),
     );
@@ -275,7 +306,7 @@
 
     const cataloguePane = el('div', 'grid-pane');
     const catalogueGrid = createGrid(cataloguePane, baseGridConfig('Series in this dashboard', {
-      columns: catalogueColumns(),
+      columns: catalogueColumns(barRanges(data.catalogue)),
       selection: { mode: 'multiple', checkbox: true, headerCheckbox: true },
       sort: [{ col: 'category', dir: 'asc' }, { col: 'title', dir: 'asc' }],
     }));
@@ -289,8 +320,8 @@
         { id: 's', field: 's', title: 'Series' },
         { id: 'd', field: 'd', title: 'Date', type: 'date' },
         { id: 'v', field: 'v', title: 'Level', type: 'number' },
-        { id: 'pct', field: 'pct', title: 'Change %', type: 'number' },
-        { id: 'yoy', field: 'yoy', title: 'Year on year %', type: 'number' },
+        { id: 'pp', field: 'pp', title: 'Change on the period before', type: 'number' },
+        { id: 'yp', field: 'yp', title: 'Change on a year earlier', type: 'number' },
         { id: 'idx', field: 'idx', title: 'Index', type: 'number' },
         { id: 'change', field: 'change', title: 'Change', type: 'number' },
       ],
@@ -307,7 +338,9 @@
         { id: 's', field: 's', title: 'Series' },
         { id: 'd', field: 'd', title: 'Date', type: 'date' },
         { id: 'v', field: 'v', title: 'Level', type: 'number' },
-        { id: 'yoy', field: 'yoy', title: 'Year on year %', type: 'number' },
+        { id: 'yoy', field: 'yoy', title: 'On a year earlier, %', type: 'number' },
+        { id: 'yoyChange', field: 'yoyChange', title: 'On a year earlier, points', type: 'number' },
+        { id: 'rate', field: 'rate', title: 'Rate series' },
       ],
       statusBar: false,
       find: false,
@@ -448,37 +481,50 @@
       for (const sid of chosen) {
         const entry = data.byId.get(sid);
         const mine = readingsOf(tileGrid.rows.data(), sid);
-        const latest = mine.length ? mine[mine.length - 1] : null;
         const previous = mine.length > 1 ? mine[mine.length - 2] : null;
+        /*
+         * The movement line under a tile's figure is the panel's own, and it
+         * draws the difference AND that difference as a percentage of the
+         * baseline together, with no way to ask for one without the other. A
+         * percentage of a rate is not a reading anyone wants (see
+         * `isRateSeries`), so a rate series is given no baseline at all and its
+         * movement is stated in points on the tile beside it. A level, a count
+         * or an index keeps both.
+         *
+         * No baseline either where there is no period before this one: an arrow
+         * pointing at nothing is worse than no arrow.
+         */
+        const baseline = !entry.rate && previous ? { baseline: previous.v } : {};
         tiles.push({
           id: `${sid}__latest`,
-          label: `${entry.title} — ${entry.units}`,
+          label: `${entry.title}: ${entry.units.toLowerCase()}`,
           aggregation: 'custom',
           format: { type: 'compact', decimals: 2 },
           compute: (rows) => {
             const list = readingsOf(rows, sid);
             return list.length ? list[list.length - 1].v : null;
           },
-          /* No baseline where there is no period before this one: an arrow
-             pointing at nothing is worse than no arrow. */
-          ...(previous ? { baseline: previous.v } : {}),
+          ...baseline,
         });
         tiles.push({
           id: `${sid}__yoy`,
-          label: `${entry.title} — on a year earlier, %`,
+          label: entry.rate
+            ? `${entry.title}: on a year earlier, percentage points`
+            : `${entry.title}: on a year earlier, per cent`,
           aggregation: 'custom',
-          format: { type: 'number', decimals: 1 },
+          format: { type: 'number', decimals: entry.rate ? 2 : 1 },
           compute: (rows) => {
             const list = readingsOf(rows, sid);
-            return list.length ? list[list.length - 1].yoy : null;
+            if (!list.length) return null;
+            const latest = list[list.length - 1];
+            return entry.rate ? latest.yoyChange : latest.yoy;
           },
         });
-        void latest;
       }
       built.kpi = createKPI(kpiStrip, {
         grid: tileGrid,
         rowKey: 'id',
-        fields: ['s', 'd', 'v', 'yoy'],
+        fields: ['s', 'd', 'v', 'yoy', 'yoyChange', 'rate'],
         columns: Math.min(4, tiles.length),
         ariaLabel: 'The selected series, latest',
         tiles,
@@ -517,13 +563,14 @@
     toolbar.append(baseInput);
 
     /*
-     * Which unit the level chart draws. One measure axis means one unit at a
-     * time; this is how a reader chooses which. It appears only when the
-     * selection actually spans more than one.
+     * Which unit the chart draws. One measure axis means one unit at a time;
+     * this is how a reader chooses which. It appears only when the selection
+     * actually spans more than one, which depends on the mode: a change chart
+     * of a rate and a level spans percentage points and per cent.
      */
     const unitLabel = el('span', 'actions-label', 'Unit:');
     const unitPicker = el('select', 'action');
-    unitPicker.setAttribute('aria-label', 'Which unit the level chart draws');
+    unitPicker.setAttribute('aria-label', 'Which unit the chart draws');
     unitPicker.addEventListener('change', () => {
       built.unit = unitPicker.value;
       drawChart();
@@ -532,13 +579,15 @@
     chartSection.append(toolbar);
 
     /**
-     * Fill the unit picker from the units the selection spans.
+     * Fill the unit picker from the units the current mode would draw.
      *
      * @param {{group: string, ids: string[]}[]} groups the unit groups
      * @returns {void}
      */
     function rebuildUnitPicker(groups) {
-      const show = built.mode === 'level' && groups.length > 1;
+      /* Shown in any mode whose selection spans more than one unit, which now
+         includes a change chart mixing a rate with a level. */
+      const show = groups.length > 1;
       unitLabel.hidden = !show;
       unitPicker.hidden = !show;
       if (!show) return;
@@ -613,15 +662,34 @@
     }
 
     /**
-     * Group the selected series by the unit they are measured in.
+     * What the chart's value axis is measured in for one series, in one mode.
+     *
+     * A level chart reads the series' own unit. A change chart reads percentage
+     * points for a series that is itself a rate and per cent for everything
+     * else, which is the rule `isRateSeries` states. An index is an index.
+     *
+     * @param {string} sid the series id
+     * @param {string} mode the transformation in force
+     * @returns {string} the unit the axis would carry
+     */
+    function axisUnitOf(sid, mode) {
+      const entry = data.byId.get(sid);
+      if (mode === 'index') return 'Index, 100 at the base month';
+      if (mode === 'level') return entry.unitGroup;
+      return entry.rate ? POINTS : PER_CENT;
+    }
+
+    /**
+     * Group the selected series by the unit the current mode would draw them in.
      *
      * @param {string[]} chosen the selected series ids
+     * @param {string} mode the transformation in force
      * @returns {{group: string, ids: string[]}[]} the groups, largest first
      */
-    function unitGroups(chosen) {
+    function unitGroups(chosen, mode) {
       const groups = new Map();
       for (const sid of chosen) {
-        const group = data.byId.get(sid).unitGroup;
+        const group = axisUnitOf(sid, mode);
         if (!groups.has(group)) groups.set(group, []);
         groups.get(group).push(sid);
       }
@@ -647,10 +715,12 @@
     /**
      * Draw, or redraw, the main chart for the current mode and selection.
      *
-     * One measure axis, always. A level chart of series measured in different
-     * units therefore draws one unit at a time, chosen in the toolbar; the
-     * percentage and index transformations put every series into the same unit
-     * and draw them all together, which is the reason they are there.
+     * One measure axis, always, and one unit on it. A level chart of series
+     * measured in different units therefore draws one unit at a time, chosen in
+     * the toolbar. So does a change chart whose selection mixes rate series
+     * with levels, because the first move in percentage points and the second
+     * in per cent, and putting both on one axis would be two units pretending
+     * to be one.
      *
      * @returns {void}
      */
@@ -661,12 +731,12 @@
       if (!chosen.length) { describeSelection(); return; }
 
       const mode = MODES.find((m) => m.id === built.mode);
-      const groups = unitGroups(chosen);
+      const groups = unitGroups(chosen, built.mode);
 
-      /* Level: only the series measured in the chosen unit are drawn, through a
-         named row predicate on the chart's own grid. The tiles and the
-         observations table are fed by their own routes and keep every series. */
-      if (built.mode === 'level' && groups.length > 1) {
+      /* Only the series measured in the chosen unit are drawn, through a named
+         row predicate on the chart's own grid. The tiles and the observations
+         table are fed by their own routes and keep every series. */
+      if (groups.length > 1) {
         if (!groups.some((g) => g.group === built.unit)) built.unit = groups[0].group;
         const wanted = new Set(groups.find((g) => g.group === built.unit).ids);
         chartGrid.filters.where('unit', (row) => wanted.has(row.s));
@@ -677,9 +747,7 @@
       rebuildUnitPicker(groups);
       describeSelection();
 
-      const notDrawn = built.mode === 'level'
-        ? groups.filter((g) => g.group !== built.unit).flatMap((g) => g.ids)
-        : [];
+      const notDrawn = groups.filter((g) => g.group !== built.unit).flatMap((g) => g.ids);
 
       built.chart = createChart({
         grid: chartGrid,
@@ -695,23 +763,23 @@
         title: built.mode === 'index' ? `Index, 100 at ${built.indexBase}` : mode.label,
         axis: {
           x: { title: '', ticks: decadeTicks() },
-          y: {
-            title: built.mode === 'level'
-              ? built.unit
-              : built.mode === 'index' ? 'Index' : 'Per cent',
-          },
+          y: { title: built.mode === 'index' ? 'Index' : String(built.unit) },
         },
-        footnote:
-          built.mode === 'level'
-            ? (notDrawn.length
-              ? `Showing the ${chosen.length - notDrawn.length} of ${chosen.length} selected series measured in `
-                + `${String(built.unit).toLowerCase()}. Not drawn here: `
-                + `${notDrawn.map((sid) => data.byId.get(sid).title).join(', ')} \u2014 a different unit needs a `
-                + 'different scale. Pick another unit above, or switch to an index or a percentage change.'
-              : `All ${String(built.unit).toLowerCase()}.`)
+        footnote: `${
+          notDrawn.length
+            ? `Showing the ${chosen.length - notDrawn.length} of ${chosen.length} selected series measured in `
+              + `${String(built.unit).toLowerCase()}. Not drawn here: `
+              + `${notDrawn.map((sid) => data.byId.get(sid).title).join(', ')}. A different unit needs a `
+              + 'different scale, so pick another unit above.'
+            : `All ${String(built.unit).toLowerCase()}.`
+        }${
+          built.mode === 'pct' || built.mode === 'yoy'
+            ? ' A series that is itself a rate moves in percentage points; a level, a count or an index '
+              + 'moves in per cent.'
             : built.mode === 'index'
-              ? `Each series set to 100 at ${built.indexBase}; a series with no reading by then is not drawn.`
-              : 'A percentage of each series\u2019 own value, so a rate\u2019s change is in per cent, not in points.',
+              ? ` Each series is set to 100 at ${built.indexBase}; a series with no reading by then is not drawn.`
+              : ''
+        }`,
       });
     }
 
@@ -867,6 +935,26 @@
     };
 
     return built;
+  }
+
+  /**
+   * The symmetric range each year-on-year bar is drawn against.
+   *
+   * Taken from the data rather than guessed, so no bar is ever clipped at a
+   * number somebody picked, and the two columns are scaled separately because
+   * they are in different units.
+   *
+   * @param {object[]} catalogue the catalogue rows
+   * @returns {{points: number, percent: number}} the two half-ranges
+   */
+  function barRanges(catalogue) {
+    let points = 0;
+    let percent = 0;
+    for (const row of catalogue) {
+      if (row.yoyPoints != null) points = Math.max(points, Math.abs(row.yoyPoints));
+      if (row.yoyPercent != null) percent = Math.max(percent, Math.abs(row.yoyPercent));
+    }
+    return { points: points || 1, percent: percent || 1 };
   }
 
   root.FredDemo.buildDashboard = buildDashboard;

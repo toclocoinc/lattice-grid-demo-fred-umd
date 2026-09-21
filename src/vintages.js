@@ -34,7 +34,7 @@
 
   /** A date, written out. */
   function longDate(date) {
-    if (!date) return '—';
+    if (!date) return 'no date';
     return new Date(`${date}T00:00:00Z`).toLocaleDateString('en-GB', {
       day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC',
     });
@@ -50,8 +50,8 @@
    * @param {string} units the series' units, for the column titles
    * @returns {object[]} the column definitions
    */
-  function revisionColumns(units) {
-    return [
+  function revisionColumns(units, rate) {
+    const columns = [
       {
         id: 'd',
         field: 'd',
@@ -88,12 +88,21 @@
       {
         id: 'revision',
         field: 'revision',
-        title: 'Revision',
+        /* A revision to a rate is a number of percentage points; a revision to
+           a level or an index is a number in that series' own units. */
+        title: rate ? 'Revision, percentage points' : 'Revision',
         type: 'number',
-        format: { type: 'number', decimals: 2, signed: true },
-        layout: { width: 140 },
+        format: rate
+          ? { type: 'number', decimals: 2, suffix: ' pp', signed: true }
+          : { type: 'number', decimals: 2, signed: true },
+        layout: { width: rate ? 200 : 140 },
       },
-      {
+    ];
+    /* No percentage column at all for a rate series: a revision of 0.30 points
+       to a rate of 0.30 is not "100% wrong", and a blank column inviting the
+       question is worse than no column. */
+    if (!rate) {
+      columns.push({
         id: 'revisionPct',
         field: 'revisionPct',
         title: 'Revision %',
@@ -101,8 +110,9 @@
         format: { type: 'number', decimals: 1, suffix: '%', signed: true },
         cell: { decoration: { type: 'bar', min: -20, max: 20, origin: 0 } },
         layout: { width: 160 },
-      },
-    ];
+      });
+    }
+    return columns;
   }
 
   /**
@@ -127,6 +137,7 @@
       series: OPENING_SERIES,
       vintage: null,
       router: null,
+      rate: false,
       asPublishedGrid: null,
       revisionsGrid: null,
       chart: null,
@@ -159,7 +170,7 @@
     slider.step = '1';
     slider.setAttribute('aria-label', 'The date to rewind to');
     bar.append(slider);
-    const readout = el('span', 'vintage-readout', '—');
+    const readout = el('span', 'vintage-readout', 'no vintage');
     bar.append(readout);
 
     const liveButton = el('button', 'action', 'Back to today');
@@ -211,7 +222,7 @@
       statusBar: true,
       find: true,
       title: 'Every reading, as first published and as it stands now',
-      columns: revisionColumns(''),
+      columns: revisionColumns('', false),
       sort: [{ col: 'd', dir: 'desc' }],
     });
     built.revisionsGrid = revisionsGrid;
@@ -234,11 +245,13 @@
       grid: revisionsGrid,
       container: statBox,
       title: 'Largest revision',
+      /* No baseline, deliberately: the tile's movement line is a percentage of
+         whatever it is compared with, and a revision is already a difference. */
       value: (grid) => {
         const row = largestRevision(grid);
         return row ? row.revision : null;
       },
-      format: (value) => (value == null ? '—' : `${value > 0 ? '+' : ''}${value.toFixed(2)}`),
+      format: (value) => (value == null ? 'No data' : `${value > 0 ? '+' : ''}${value.toFixed(2)}${built.rate ? ' pp' : ''}`),
       footer: (value, grid) => {
         const row = largestRevision(grid);
         if (!row) return 'No readings in view.';
@@ -270,7 +283,9 @@
       built.series = sid;
       const entry = data.byId.get(sid);
       const units = entry ? entry.units : '';
-      revisionsGrid.set('columns', revisionColumns(units));
+      const rate = !!(entry && entry.rate);
+      built.rate = rate;
+      revisionsGrid.set('columns', revisionColumns(units, rate));
 
       const dates = index.datesFor(sid);
       built.dates = dates;
@@ -304,7 +319,7 @@
         if (deltas.length) router.apply(deltas);
       }
 
-      revisionsGrid.rows.load(root.FredDemo.revisionsFor(index, sid));
+      revisionsGrid.rows.load(root.FredDemo.revisionsFor(index, sid, rate));
 
       const opening = sid === OPENING_SERIES && dates.includes(OPENING_VINTAGE)
         ? dates.indexOf(OPENING_VINTAGE)
@@ -356,7 +371,7 @@
         `${entry ? entry.units.toLowerCase() : ''}` +
         (moved == null
           ? '.'
-          : `, which now reads ${lastNow.v.toFixed(2)} — a revision of ${moved > 0 ? '+' : ''}${moved.toFixed(2)}.`) +
+          : `, which now reads ${lastNow.v.toFixed(2)}, a revision of ${moved > 0 ? '+' : ''}${moved.toFixed(2)}${built.rate ? ' percentage points' : ''}.`) +
         ` ${travelling ? 'Rewound' : 'At the newest vintage'}; ${held} changes held in the router’s buffer.`;
     }
 
