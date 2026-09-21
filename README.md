@@ -1,5 +1,7 @@
 # The US economy, as it was published
 
+**Live page:** https://toclocoinc.github.io/lattice-grid-demo-fred-umd/
+
 Forty-seven headline US economic series from FRED: output, prices, jobs,
 interest rates, housing, trade, energy and the federal balance sheet, with one
 thing most charting demos do not have. The numbers **as they were first
@@ -10,6 +12,7 @@ build step, no `type="module"`.
 
 | | |
 | --- | --- |
+| Live page | [toclocoinc.github.io/lattice-grid-demo-fred-umd](https://toclocoinc.github.io/lattice-grid-demo-fred-umd/) |
 | Grid on npm | [@toclocoinc/lattice-grid](https://www.npmjs.com/package/@toclocoinc/lattice-grid) |
 | Grid repository | [toclocoinc/latticegrid](https://github.com/toclocoinc/latticegrid) |
 | Product site | [latticegrid.dev](https://www.latticegrid.dev) |
