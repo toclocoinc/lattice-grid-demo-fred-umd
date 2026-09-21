@@ -111,7 +111,13 @@ async function getText(url, what) {
         signal: AbortSignal.timeout(120000),
       });
       if (response.status >= 500) throw new Error(`${what}: FRED answered ${response.status}`);
-      if (!response.ok) throw new Error(`${what}: FRED answered ${response.status} ${response.statusText}`);
+      if (!response.ok) {
+        /* FRED puts the reason in the body. A bare "400 Bad Request" in a log
+           is a thing nobody can act on; its own sentence usually names the
+           parameter it did not like. */
+        const detail = (await response.text().catch(() => '')).replace(/\s+/g, ' ').trim().slice(0, 300);
+        throw new Error(`${what}: FRED answered ${response.status} ${response.statusText}${detail ? ` -- ${detail}` : ''}`);
+      }
       const body = await response.text();
       if (!body.trim()) throw new Error(`${what}: FRED answered with an empty body`);
       return body;
@@ -384,7 +390,7 @@ async function readRealtime(id, points) {
       realtime_start: VINTAGE_START,
       realtime_end: '9999-12-31',
       observation_start: VINTAGE_START,
-      limit: '100000',
+      sort_order: 'asc',
     }),
     `the real-time matrix of ${id}`,
   );
@@ -440,15 +446,31 @@ async function readRealtime(id, points) {
 async function buildRealtime(catalogue, shape, vintages) {
   const realtime = [];
   const withHistory = [];
+  const refused = [];
   let rows = 0;
 
   for (const row of catalogue) {
     const points = shape.get(row.id) || [];
     let matrix;
     if (MODE === 'keyed') {
-      matrix = await readRealtime(row.id, points);
-      withHistory.push(row.id);
-      say(`  real time: ${row.id} -- ${matrix.length} rows`);
+      try {
+        matrix = await readRealtime(row.id, points);
+        withHistory.push(row.id);
+        say(`  real time: ${row.id} -- ${matrix.length} rows`);
+      } catch (error) {
+        /*
+         * A series FRED will not hand its real-time matrix for is recorded as
+         * one without a history rather than taken as a reason to throw away a
+         * twelve-minute build. It is not a silent hole: the id goes into
+         * meta.json, the count goes on the page, and the reason is printed
+         * here in full.
+         */
+        refused.push({ id: row.id, why: String((error && error.message) || error) });
+        say(`  real time: ${row.id} -- REFUSED: ${(error && error.message) || error}`);
+        matrix = points
+          .filter((point) => point.d >= VINTAGE_START)
+          .map((point) => [point.d, point.v, VINTAGE_START]);
+      }
       await pause(200);
     } else if (HEADLINE.includes(row.id)) {
       matrix = realtimeFromVintages(row.id, vintages);
@@ -463,7 +485,7 @@ async function buildRealtime(catalogue, shape, vintages) {
     rows += matrix.length;
     realtime.push({ s: row.id, r: matrix });
   }
-  return { realtime, withHistory, rows };
+  return { realtime, withHistory, refused, rows };
 }
 
 /**
@@ -661,9 +683,13 @@ async function main() {
   }
 
   /* ---- when every reading was published, and at what ---- */
-  const { realtime, withHistory, rows: realtimeRows } = await buildRealtime(catalogue, shape, vintages);
+  const { realtime, withHistory, refused, rows: realtimeRows } = await buildRealtime(catalogue, shape, vintages);
   say(`  real time: ${realtimeRows} rows across ${realtime.length} series, `
     + `${withHistory.length} of them with a real revision history`);
+  if (refused.length) {
+    say(`  real time: ${refused.length} series FRED would not hand a matrix for:`);
+    for (const entry of refused) say(`    ${entry.id}: ${entry.why}`);
+  }
 
   /* ---- out ---- */
   const meta = {
@@ -681,6 +707,7 @@ async function main() {
       rows: realtimeRows,
       seriesWithHistory: withHistory.length,
       seriesWithoutHistory: catalogue.length - withHistory.length,
+      refused: refused.map((entry) => entry.id),
     },
     counts: {
       series: catalogue.length,
