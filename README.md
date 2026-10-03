@@ -44,13 +44,13 @@ to try.
 Six tags in `index.html`, and that is the whole of the library setup:
 
 ```html
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@toclocoinc/lattice-grid@1.86.3/lattice-grid.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@toclocoinc/lattice-grid@1.86.4/lattice-grid.min.css">
 
-<script src="https://cdn.jsdelivr.net/npm/@toclocoinc/lattice-grid@1.86.3/lattice-grid.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@toclocoinc/lattice-grid@1.86.3/modules/charts.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@toclocoinc/lattice-grid@1.86.3/modules/data-router.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@toclocoinc/lattice-grid@1.86.3/modules/kpi.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@toclocoinc/lattice-grid@1.86.3/modules/tabs.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@toclocoinc/lattice-grid@1.86.4/lattice-grid.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@toclocoinc/lattice-grid@1.86.4/modules/charts.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@toclocoinc/lattice-grid@1.86.4/modules/data-router.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@toclocoinc/lattice-grid@1.86.4/modules/kpi.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@toclocoinc/lattice-grid@1.86.4/modules/tabs.min.js"></script>
 ```
 
 Each file is the package's UMD build (`*.min.js`, beside the `*.esm.min.js` the
